@@ -160,7 +160,28 @@ impl MeshCore {
     /// Given a peripheral's name or mac address (as a &str formatted thus
     /// "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}" using BDAddr.to_string()),
     /// return the [Peripheral] struct
+    ///
+    /// A peripheral the host has already seen — because an earlier scan in the
+    /// same process found it, which is the normal shape of "discover, show the
+    /// user a list, then connect to their choice" — may never be re-announced
+    /// as freshly *discovered*. The OS reports it as already-known instead, so
+    /// waiting only for [`CentralEvent::DeviceDiscovered`] can time out with
+    /// the target sitting right there in the adapter's own cache.
+    ///
+    /// So: consult the cache first, which resolves immediately and starts no
+    /// scan at all in that case, and if a scan is still needed accept the
+    /// other events that carry a peripheral id.
     async fn find_peripheral(target_name_or_mac: &str) -> crate::Result<Peripheral> {
+        const PERIPHERAL_SCAN_TIMEOUT: Duration = Duration::from_secs(6);
+
+        async fn matches(peripheral: &Peripheral, target_name_or_mac: &str) -> bool {
+            let Ok(Some(props)) = peripheral.properties().await else {
+                return false;
+            };
+            props.local_name.as_deref() == Some(target_name_or_mac)
+                || props.address.to_string() == target_name_or_mac
+        }
+
         let manager = Manager::new()
             .await
             .map_err(|e| Error::connection(format!("Failed to create BLE manager: {}", e)))?;
@@ -174,6 +195,18 @@ impl MeshCore {
             .into_iter()
             .next()
             .ok_or_else(|| Error::connection("No BLE adapters found"))?;
+
+        // Cache first, before any scan is started. If an earlier scan in this
+        // process already found this peripheral, this resolves immediately —
+        // and skipping a scan cycle is worth more than the latency alone,
+        // since Android rate-limits how often a scan may be (re)started.
+        if let Ok(cached) = adapter.peripherals().await {
+            for peripheral in cached {
+                if matches(&peripheral, target_name_or_mac).await {
+                    return Ok(peripheral);
+                }
+            }
+        }
 
         // Subscribe to adapter events
         let mut events = adapter
@@ -189,21 +222,21 @@ impl MeshCore {
             .map_err(|e| Error::connection(format!("Failed to start BLE scan: {}", e)))?;
 
         let target_peripheral: Option<Peripheral> = {
-            let timeout = tokio::time::timeout(Duration::from_secs(2), async {
+            let timeout = tokio::time::timeout(PERIPHERAL_SCAN_TIMEOUT, async {
                 while let Some(event) = events.next().await {
-                    if let CentralEvent::DeviceDiscovered(id) = event {
-                        if let Ok(peripheral) = adapter.peripheral(&id).await {
-                            if let Ok(Some(props)) = peripheral.properties().await {
-                                // return this peripheral if the name matches
-                                if props.local_name.as_deref() == Some(target_name_or_mac) {
-                                    return Some(peripheral);
-                                }
-
-                                // return this peripheral if the MAC address matches
-                                if props.address.to_string() == target_name_or_mac {
-                                    return Some(peripheral);
-                                }
-                            }
+                    // Not just DeviceDiscovered: a peripheral the host already
+                    // knows about announces itself through these instead.
+                    let id = match &event {
+                        CentralEvent::DeviceDiscovered(id)
+                        | CentralEvent::DeviceUpdated(id)
+                        | CentralEvent::ServicesAdvertisement { id, .. }
+                        | CentralEvent::RssiUpdate { id, .. } => Some(id.clone()),
+                        _ => None,
+                    };
+                    let Some(id) = id else { continue };
+                    if let Ok(peripheral) = adapter.peripheral(&id).await {
+                        if matches(&peripheral, target_name_or_mac).await {
+                            return Some(peripheral);
                         }
                     }
                 }
