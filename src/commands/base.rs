@@ -64,6 +64,11 @@ const CMD_SEND_BINARY_REQ: u8 = 50;
 const CMD_FACTORY_RESET: u8 = 51;
 const CMD_PATH_DISCOVERY: u8 = 52;
 const CMD_SET_FLOOD_SCOPE: u8 = 54;
+
+/// Text types for [`CommandHandler::send_msg_with_options`].
+pub const TXT_TYPE_PLAIN: u8 = 0;
+/// A command for a repeater or room server rather than a message for a person.
+pub const TXT_TYPE_CLI_DATA: u8 = 1;
 const CMD_SEND_CONTROL_DATA: u8 = 55;
 const CMD_GET_STATS: u8 = 56;
 const CMD_SET_AUTOADD_CONFIG: u8 = 58;
@@ -878,6 +883,25 @@ impl CommandHandler {
         Ok(())
     }
 
+    /// Forget the known route to a contact, so the next message to it floods.
+    ///
+    /// Format: [CMD_RESET_PATH=0x0D][pubkey: 32]
+    ///
+    /// The firmware clears the contact's `out_path` and answers `Ok`. A
+    /// message sent afterwards goes out as a flood and the reply's path
+    /// teaches the firmware a fresh route.
+    pub async fn reset_path(&self, key: impl Into<Destination>) -> Result<()> {
+        let dest: Destination = key.into();
+        let pubkey = dest
+            .public_key()
+            .ok_or_else(|| Error::invalid_param("Reset path requires full 32-byte public key"))?;
+
+        let mut data = vec![CMD_RESET_PATH];
+        data.extend_from_slice(&pubkey);
+        self.send(&data, Some(EventType::Ok)).await?;
+        Ok(())
+    }
+
     // ========== Messaging Commands ==========
 
     /// Get the next message from the queue
@@ -921,14 +945,40 @@ impl CommandHandler {
         }
     }
 
-    /// Send a message to a contact
+    /// Send a plain text message to a contact, as a first attempt.
     ///
     /// Format: [CMD_SEND_TXT_MSG=0x02][txt_type][attempt][timestamp: u32][pubkey_prefix: 6][message]
+    ///
+    /// See [`send_msg_with_options`](Self::send_msg_with_options) to choose
+    /// the text type or to retry: the attempt byte is part of the packet hash,
+    /// so a retry that keeps it at 0 is a duplicate to every repeater that
+    /// already forwarded the first copy.
     pub async fn send_msg(
         &self,
         dest: impl Into<Destination>,
         msg: &str,
         timestamp: Option<u32>,
+    ) -> Result<MsgSentInfo> {
+        self.send_msg_with_options(dest, msg, timestamp, TXT_TYPE_PLAIN, 0)
+            .await
+    }
+
+    /// Send a text message to a contact with an explicit text type and
+    /// attempt number.
+    ///
+    /// Format: [CMD_SEND_TXT_MSG=0x02][txt_type][attempt][timestamp: u32][pubkey_prefix: 6][message]
+    ///
+    /// `txt_type` is [`TXT_TYPE_PLAIN`] or [`TXT_TYPE_CLI_DATA`]. `attempt`
+    /// is 0 for the first send and counts up on each retry of the same
+    /// message; the firmware folds it into the packet hash so each attempt
+    /// is a distinct packet with its own expected ACK.
+    pub async fn send_msg_with_options(
+        &self,
+        dest: impl Into<Destination>,
+        msg: &str,
+        timestamp: Option<u32>,
+        txt_type: u8,
+        attempt: u8,
     ) -> Result<MsgSentInfo> {
         let dest: Destination = dest.into();
         let prefix = dest.prefix()?;
@@ -939,8 +989,7 @@ impl CommandHandler {
                 .as_secs() as u32
         });
 
-        // TXT_TYPE_PLAIN = 0, attempt = 0
-        let mut data = vec![CMD_SEND_TXT_MSG, 0x00, 0x00]; // Second 0x00 is "attempt"
+        let mut data = vec![CMD_SEND_TXT_MSG, txt_type, attempt];
         data.extend_from_slice(&ts.to_le_bytes());
         data.extend_from_slice(&prefix);
         data.extend_from_slice(msg.as_bytes());
@@ -1905,6 +1954,100 @@ mod tests {
 
         let result = handler.send_advert(false).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_msg_with_options_wire_format() {
+        let (handler, mut rx, dispatcher) = create_test_handler();
+
+        let dispatcher_clone = dispatcher.clone();
+        tokio::spawn(async move {
+            let sent = rx.recv().await.unwrap();
+            assert_eq!(sent[0], CMD_SEND_TXT_MSG);
+            assert_eq!(sent[1], TXT_TYPE_CLI_DATA);
+            assert_eq!(sent[2], 2); // attempt
+            assert_eq!(&sent[3..7], &1_700_000_000u32.to_le_bytes());
+            assert_eq!(&sent[7..13], &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+            assert_eq!(&sent[13..], b"hi");
+
+            dispatcher_clone
+                .emit(MeshCoreEvent::new(
+                    EventType::MsgSent,
+                    EventPayload::MsgSent(MsgSentInfo {
+                        message_type: 0,
+                        expected_ack: [0xAA, 0xBB, 0xCC, 0xDD],
+                        suggested_timeout: 3000,
+                    }),
+                ))
+                .await;
+        });
+
+        let info = handler
+            .send_msg_with_options(
+                &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06][..],
+                "hi",
+                Some(1_700_000_000),
+                TXT_TYPE_CLI_DATA,
+                2,
+            )
+            .await
+            .unwrap();
+        assert_eq!(info.expected_ack, [0xAA, 0xBB, 0xCC, 0xDD]);
+        assert_eq!(info.suggested_timeout, 3000);
+    }
+
+    #[tokio::test]
+    async fn test_send_msg_is_a_plain_first_attempt() {
+        let (handler, mut rx, dispatcher) = create_test_handler();
+
+        let dispatcher_clone = dispatcher.clone();
+        tokio::spawn(async move {
+            let sent = rx.recv().await.unwrap();
+            assert_eq!(sent[0], CMD_SEND_TXT_MSG);
+            assert_eq!(sent[1], TXT_TYPE_PLAIN);
+            assert_eq!(sent[2], 0);
+            dispatcher_clone
+                .emit(MeshCoreEvent::new(
+                    EventType::MsgSent,
+                    EventPayload::MsgSent(MsgSentInfo {
+                        message_type: 1,
+                        expected_ack: [0; 4],
+                        suggested_timeout: 5000,
+                    }),
+                ))
+                .await;
+        });
+
+        let info = handler
+            .send_msg(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06][..], "hi", Some(1))
+            .await
+            .unwrap();
+        assert_eq!(info.message_type, 1);
+    }
+
+    #[tokio::test]
+    async fn test_reset_path_wire_format() {
+        let (handler, mut rx, dispatcher) = create_test_handler();
+
+        let dispatcher_clone = dispatcher.clone();
+        tokio::spawn(async move {
+            let sent = rx.recv().await.unwrap();
+            assert_eq!(sent[0], CMD_RESET_PATH);
+            assert_eq!(sent.len(), 33);
+            assert_eq!(&sent[1..], &[0x42u8; 32]);
+            dispatcher_clone.emit(MeshCoreEvent::ok()).await;
+        });
+
+        let result = handler.reset_path(&[0x42u8; 32][..]).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_reset_path_requires_full_key() {
+        let (handler, _rx, _dispatcher) = create_test_handler();
+
+        let result = handler.reset_path(&[0x42u8; 6][..]).await;
+        assert!(matches!(result, Err(Error::InvalidParameter(_))));
     }
 
     #[tokio::test]
