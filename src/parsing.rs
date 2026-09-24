@@ -115,7 +115,12 @@ pub fn read_bytes<const N: usize>(data: &[u8], offset: usize) -> Result<[u8; N]>
     Ok(arr)
 }
 
-/// Parse a contact from raw bytes (149 bytes)
+/// Parse a contact from raw bytes.
+///
+/// The companion firmware's contact frame (`writeContactRespFrame`) is
+/// 147 payload bytes: the `lastmod` timestamp sits at 143..147 and is
+/// the last field. A shorter frame from older firmware carries no
+/// `lastmod`, which reads as 0.
 pub fn parse_contact(data: &[u8]) -> Result<Contact> {
     if data.len() < 145 {
         return Err(Error::protocol(format!(
@@ -146,7 +151,7 @@ pub fn parse_contact(data: &[u8]) -> Result<Contact> {
     let adv_lon = read_i32_le(data, 139)?;
 
     // The last modification timestamp is optional (4 bytes at offset 143)
-    let last_modification_timestamp = if data.len() >= 149 {
+    let last_modification_timestamp = if data.len() >= 147 {
         read_u32_le(data, 143).unwrap_or(0)
     } else {
         0
@@ -1753,6 +1758,32 @@ mod tests {
         assert_eq!(contact.adv_lat, 37774900);
         assert_eq!(contact.adv_lon, -122419400);
         assert_eq!(contact.last_modification_timestamp, 2000);
+    }
+
+    #[test]
+    fn test_parse_contact_reads_lastmod_from_the_firmwares_147_byte_frame() {
+        // Exactly what the firmware sends: lastmod is the final field, so
+        // the frame ends at byte 147 and nothing follows it.
+        let mut data = vec![0u8; 147];
+        data[0..6].copy_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+        data[32] = 1;
+        data[99..104].copy_from_slice(b"Test\0");
+        data[131..135].copy_from_slice(&1000u32.to_le_bytes());
+        data[143..147].copy_from_slice(&2000u32.to_le_bytes());
+
+        let contact = parse_contact(&data).unwrap();
+        assert_eq!(contact.last_advert, 1000);
+        assert_eq!(contact.last_modification_timestamp, 2000);
+    }
+
+    #[test]
+    fn test_parse_contact_without_lastmod_reads_zero() {
+        let mut data = vec![0u8; 145];
+        data[32] = 1;
+        data[131..135].copy_from_slice(&1000u32.to_le_bytes());
+
+        let contact = parse_contact(&data).unwrap();
+        assert_eq!(contact.last_modification_timestamp, 0);
     }
 
     #[test]
