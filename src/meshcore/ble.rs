@@ -77,7 +77,7 @@ impl MeshCore {
     /// Connect to a Btle peripheral that is a MeshCore radio and return the [MeshCore] to use to
     /// communicate with it
     async fn ble_connect_peripheral(
-        peripheral: &Peripheral,
+        peripheral: Peripheral,
     ) -> crate::Result<(MeshCore, Receiver<Vec<u8>>, Characteristic)> {
         // Check if already connected, disconnect first if so
         if peripheral.is_connected().await.unwrap_or(false) {
@@ -152,7 +152,9 @@ impl MeshCore {
         tracing::info!("Subscribed to MeshCore notifications");
 
         let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
-        Ok((MeshCore::new_with_sender(tx), rx, tx_char))
+        let meshcore = MeshCore::new_with_sender(tx);
+        *meshcore.peripheral.lock().await = Some(peripheral);
+        Ok((meshcore, rx, tx_char))
     }
 
     /// Given a peripheral's name or mac address (as a &str formatted thus
@@ -223,11 +225,12 @@ impl MeshCore {
     /// This method connects to a MeshCore radio by BTLE device name
     pub async fn ble_connect(name: &str) -> crate::Result<MeshCore> {
         let peripheral = Self::find_peripheral(name).await?;
-        let (meshcore, mut rx, tx_char) = Self::ble_connect_peripheral(&peripheral).await?;
 
         // Clone peripheral for tasks
         let peripheral_write = peripheral.clone();
         let peripheral_read = peripheral.clone();
+
+        let (meshcore, mut rx, tx_char) = Self::ble_connect_peripheral(peripheral).await?;
 
         // Spawn write task
         // BLE does NOT use framing - send raw payload directly (unlike serial which uses [0x3c][len][payload])
