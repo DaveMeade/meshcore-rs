@@ -170,6 +170,8 @@ traffic never triggers it; use `LogData` for general monitoring as above.
 - `set_name()` - Set device name
 - `set_coords()` - Set device coordinates
 - `set_tx_power()` - Set transmission power
+- `set_radio_params()` - Set frequency, bandwidth, spreading factor, coding rate, and client repeat
+- `set_path_hash_mode()` - Set the path hash size
 - `send_advert()` - Send advertisement
 - `get_channel()` / `set_channel()` - Get/set channel config
 - `get_autoadd_config()` - Get auto-add-contacts flags (contact-type bitmask + the table-full "overwrite oldest" bit)
@@ -218,7 +220,6 @@ assumed).
 
 | Code | Name | Description | Minimum firmware version | In `meshcore_py`? |
 |---|---|---|---|---|
-| 11 (0x0B) | `SET_RADIO_PARAMS` | Set radio freq/bandwidth/spreading factor/coding rate | companion-v1.0.0a | ✅ `set_radio()` |
 | 13 (0x0D) | `RESET_PATH` | Reset a contact's known route back to flood routing | companion-v1.0.0a | ✅ `reset_path()` |
 | 16 (0x10) | `SHARE_CONTACT` | Re-share a known contact's advert with the mesh | companion-v1.0.0a | ✅ `share_contact()` |
 | 21 (0x15) | `SET_TUNING_PARAMS` | Set radio tuning params (rx delay base, airtime factor) | companion-v1.0.0a | ✅ `set_tuning()` |
@@ -235,7 +236,6 @@ assumed).
 | 56 (0x38) | `GET_STATS` | Core/radio/packet statistics (sub-type in byte 2) | companion-v1.11.0 | ✅ `get_core_stats()`/`get_radio_stats()`/`get_packet_stats()` |
 | 57 (0x39) | `SEND_ANON_REQ` | Request to a peer that isn't (yet) a known contact | companion-v1.12.0 | ✅ `send_anon_req()` |
 | 60 (0x3C) | `GET_ALLOWED_REPEAT_FREQ` | Frequency ranges a repeater is allowed to retransmit on | companion-v1.13.0 | ✅ `get_allowed_repeat_freq()` |
-| 61 (0x3D) | `SET_PATH_HASH_MODE` | Path-hash size mode used when building routes | companion-v1.14.0 | ✅ `set_path_hash_mode()`/`get_path_hash_mode()` |
 | 62 (0x3E) | `SEND_CHANNEL_DATA` | Send a raw datagram on a group/channel | companion-v1.15.0 | ❌ not found in `meshcore_py` either |
 | 63 (0x3F) | `SET_DEFAULT_FLOOD_SCOPE` | Default flood-scope (region) applied when none is given | companion-v1.15.0 | ✅ `set_default_flood_scope()` |
 | 64 (0x40) | `GET_DEFAULT_FLOOD_SCOPE` | Read the currently configured default flood-scope | companion-v1.15.0 | ✅ `get_default_flood_scope()` |
