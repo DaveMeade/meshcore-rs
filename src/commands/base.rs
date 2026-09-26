@@ -179,6 +179,14 @@ pub struct CommandHandler {
     default_timeout: Duration,
 }
 
+/// Convert the payload of an `Error` event into `Error::Device`
+fn device_error<T>(payload: EventPayload) -> Result<T> {
+    match payload {
+        EventPayload::String(msg) => Err(Error::device(msg)),
+        _ => Err(Error::device("Unknown error")),
+    }
+}
+
 impl CommandHandler {
     /// Create a new command handler
     pub fn new(
@@ -248,6 +256,23 @@ impl CommandHandler {
             .map_err(|e| Error::Channel(e.to_string()))?;
 
         Self::wait_for_any_event_on(&mut rx, expected_events, timeout).await
+    }
+
+    /// Send raw data and wait for `Ok` or `Error`, turning `Error` into
+    /// `Error::Device`
+    async fn send_checked(&self, data: &[u8]) -> Result<MeshCoreEvent> {
+        let event = self
+            .send_multi(
+                data,
+                &[EventType::Ok, EventType::Error],
+                self.default_timeout,
+            )
+            .await?;
+
+        if event.event_type == EventType::Ok {
+            return Ok(event);
+        }
+        device_error(event.payload)
     }
 
     /// Wait for a specific event
@@ -380,7 +405,7 @@ impl CommandHandler {
     pub async fn set_time(&self, timestamp: u32) -> Result<MeshCoreEvent> {
         let mut data = vec![CMD_SET_DEVICE_TIME];
         data.extend_from_slice(&timestamp.to_le_bytes());
-        self.send(&data, Some(EventType::Ok)).await
+        self.send_checked(&data).await
     }
 
     /// Set the device name
@@ -389,7 +414,7 @@ impl CommandHandler {
     pub async fn set_name(&self, name: &str) -> Result<MeshCoreEvent> {
         let mut data = vec![CMD_SET_ADVERT_NAME];
         data.extend_from_slice(name.as_bytes());
-        self.send(&data, Some(EventType::Ok)).await
+        self.send_checked(&data).await
     }
 
     /// Set device coordinates
@@ -403,7 +428,7 @@ impl CommandHandler {
         data.extend_from_slice(&lat_micro.to_le_bytes());
         data.extend_from_slice(&lon_micro.to_le_bytes());
         // Alt is optional, firmware handles len >= 9
-        self.send(&data, Some(EventType::Ok)).await
+        self.send_checked(&data).await
     }
 
     /// Set TX power
@@ -411,7 +436,7 @@ impl CommandHandler {
     /// Format: [CMD_SET_RADIO_TX_POWER=0x0C][power: u8]
     pub async fn set_tx_power(&self, power: u8) -> Result<MeshCoreEvent> {
         let data = [CMD_SET_RADIO_TX_POWER, power];
-        self.send(&data, Some(EventType::Ok)).await
+        self.send_checked(&data).await
     }
 
     /// Send advertisement
@@ -423,7 +448,7 @@ impl CommandHandler {
         } else {
             vec![CMD_SEND_SELF_ADVERT]
         };
-        self.send(&data, Some(EventType::Ok)).await
+        self.send_checked(&data).await
     }
 
     /// Reboot device (no response expected)
@@ -445,7 +470,7 @@ impl CommandHandler {
     /// Format: [CMD_FACTORY_RESET=0x33]
     pub async fn factory_reset(&self) -> Result<()> {
         let data = [CMD_FACTORY_RESET];
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -470,7 +495,7 @@ impl CommandHandler {
         data.extend_from_slice(key.as_bytes());
         data.push(b'=');
         data.extend_from_slice(value.as_bytes());
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -506,7 +531,7 @@ impl CommandHandler {
         // name_bytes[name_len..] is already zero (null terminator guaranteed)
         data.extend_from_slice(&name_bytes);
         data.extend_from_slice(secret);
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -544,11 +569,13 @@ impl CommandHandler {
             )
             .await?;
 
+        // e.g. the unsupported-command error frame on firmware older than
+        // companion-v1.12.0 (see doc comment above).
+        if event.event_type == EventType::Error {
+            return device_error(event.payload);
+        }
         match event.payload {
             EventPayload::AutoAddConfig { flags } => Ok(flags),
-            // e.g. the unsupported-command error frame on firmware older than
-            // companion-v1.12.0 (see doc comment above).
-            EventPayload::String(msg) => Err(Error::device(msg)),
             _ => Err(Error::protocol(
                 "Unexpected response to auto-add config query",
             )),
@@ -592,20 +619,7 @@ impl CommandHandler {
         if let Some(max_hops) = max_hops {
             data.push(max_hops);
         }
-        let event = self
-            .send_multi(
-                &data,
-                &[EventType::Ok, EventType::Error],
-                self.default_timeout,
-            )
-            .await?;
-
-        if event.event_type == EventType::Error {
-            return match event.payload {
-                EventPayload::String(msg) => Err(Error::device(msg)),
-                _ => Err(Error::device("Unknown error")),
-            };
-        }
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -619,7 +633,7 @@ impl CommandHandler {
             data.extend_from_slice(scope.as_bytes());
             data.resize(18, 0u8);
         }
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -676,7 +690,7 @@ impl CommandHandler {
     pub async fn send_control_data(&self, control_data: &[u8]) -> Result<()> {
         let mut data = vec![CMD_SEND_CONTROL_DATA];
         data.extend_from_slice(control_data);
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -716,9 +730,11 @@ impl CommandHandler {
             .send_multi(&data, &[event_type, EventType::Error], self.default_timeout)
             .await?;
 
+        if event.event_type == EventType::Error {
+            return device_error(event.payload);
+        }
         match event.payload {
             EventPayload::Stats(data) => Ok(data),
-            EventPayload::String(msg) => Err(Error::device(msg)),
             _ => Err(Error::protocol("Unexpected response to stats query")),
         }
     }
@@ -767,7 +783,7 @@ impl CommandHandler {
     pub async fn import_private_key(&self, key: &[u8; 64]) -> Result<()> {
         let mut data = vec![CMD_IMPORT_PRIVATE_KEY];
         data.extend_from_slice(key);
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -825,7 +841,7 @@ impl CommandHandler {
         data.extend_from_slice(&contact.adv_lat.to_le_bytes());
         data.extend_from_slice(&contact.adv_lon.to_le_bytes());
 
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -840,7 +856,7 @@ impl CommandHandler {
 
         let mut data = vec![CMD_REMOVE_CONTACT];
         data.extend_from_slice(&pubkey);
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -874,7 +890,7 @@ impl CommandHandler {
     pub async fn import_contact(&self, card_data: &[u8]) -> Result<()> {
         let mut data = vec![CMD_IMPORT_CONTACT];
         data.extend_from_slice(card_data);
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -913,10 +929,7 @@ impl CommandHandler {
         match event.event_type {
             EventType::ContactMsgRecv | EventType::ChannelMsgRecv => Ok(Some(event)),
             EventType::NoMoreMessages => Ok(None),
-            EventType::Error => match event.payload {
-                EventPayload::String(msg) => Err(Error::device(msg)),
-                _ => Err(Error::device("Unknown error")),
-            },
+            EventType::Error => device_error(event.payload),
             _ => Err(Error::protocol("Unexpected event type")),
         }
     }
@@ -983,7 +996,7 @@ impl CommandHandler {
         data.extend_from_slice(&ts.to_le_bytes());
         data.extend_from_slice(msg.as_bytes());
 
-        let _ = self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
 
         Ok(())
     }
@@ -1025,7 +1038,7 @@ impl CommandHandler {
         let mut data = vec![CMD_LOGOUT];
         data.extend_from_slice(&pubkey);
 
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -1273,7 +1286,7 @@ impl CommandHandler {
     pub async fn sign_data(&self, chunk: &[u8]) -> Result<()> {
         let mut data = vec![CMD_SIGN_DATA];
         data.extend_from_slice(chunk);
-        self.send(&data, Some(EventType::Ok)).await?;
+        self.send_checked(&data).await?;
         Ok(())
     }
 
@@ -1318,6 +1331,8 @@ impl CommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::time::timeout;
+
     use crate::{
         AUTO_ADD_CHAT, AUTO_ADD_OVERWRITE_OLDEST, AUTO_ADD_REPEATER, AUTO_ADD_ROOM_SERVER,
     };
@@ -1836,6 +1851,24 @@ mod tests {
 
         let result = handler.set_name("MyNode").await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn set_name_errors_on_device_error() {
+        let (handler, mut rx, dispatcher) = create_test_handler();
+
+        tokio::spawn(async move {
+            rx.recv().await.unwrap();
+            dispatcher.emit(MeshCoreEvent::error("Bad name")).await;
+        });
+
+        let result = timeout(Duration::from_secs(2), handler.set_name("MyNode"))
+            .await
+            .expect("setter should not wait for the default timeout");
+        match result {
+            Err(Error::Device(msg)) => assert_eq!(msg, "Bad name"),
+            other => panic!("expected Err(Error::Device(\"Bad name\")), got {other:?}"),
+        }
     }
 
     #[tokio::test]
