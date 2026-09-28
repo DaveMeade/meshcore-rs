@@ -5,6 +5,8 @@ use crate::events::*;
 #[cfg(any(feature = "serial", feature = "tcp"))]
 use crate::packets::{FRAME_START, FRAME_START_RESP};
 use crate::reader::MessageReader;
+#[cfg(feature = "ble")]
+use crate::Error;
 use crate::Result;
 #[cfg(any(feature = "serial", feature = "tcp"))]
 use bytes::BytesMut;
@@ -48,6 +50,9 @@ pub struct MeshCore {
     auto_fetch_sub: Arc<Mutex<Option<Subscription>>>,
     /// Background tasks
     pub(crate) tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// BLE peripheral to disconnect from, if connected over BLE
+    #[cfg(feature = "ble")]
+    pub(crate) peripheral: Arc<Mutex<Option<btleplug::platform::Peripheral>>>,
 }
 
 impl MeshCore {
@@ -70,6 +75,8 @@ impl MeshCore {
             connected: Arc::new(RwLock::new(false)),
             auto_fetch_sub: Arc::new(Mutex::new(None)),
             tasks: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(feature = "ble")]
+            peripheral: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -275,6 +282,20 @@ impl MeshCore {
         let mut tasks = self.tasks.lock().await;
         for task in tasks.drain(..) {
             task.abort();
+        }
+
+        // Close the link, which the Bluetooth stack may keep up after the
+        // process exits.
+        #[cfg(feature = "ble")]
+        {
+            use btleplug::api::Peripheral;
+            let mut peripheral = self.peripheral.lock().await;
+            if let Some(p) = &*peripheral {
+                p.disconnect()
+                    .await
+                    .map_err(|e| Error::connection(format!("Failed to disconnect: {}", e)))?;
+            }
+            *peripheral = None;
         }
 
         // Emit disconnected event
