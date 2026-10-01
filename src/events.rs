@@ -237,9 +237,9 @@ pub struct SelfInfo {
     pub telemetry_mode_env: u8,
     /// Manually add contact setting
     pub manual_add_contacts: bool,
-    /// Radio frequency in mHz
+    /// Radio frequency in kHz
     pub radio_freq: u32,
-    /// Radio bandwidth in mHz
+    /// Radio bandwidth in Hz
     pub radio_bw: u32,
     /// Spreading factor
     pub sf: u8,

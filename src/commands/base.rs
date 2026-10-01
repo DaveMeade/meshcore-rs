@@ -25,7 +25,6 @@ const CMD_SEND_SELF_ADVERT: u8 = 7;
 const CMD_SET_ADVERT_NAME: u8 = 8;
 const CMD_ADD_UPDATE_CONTACT: u8 = 9;
 const CMD_SYNC_NEXT_MESSAGE: u8 = 10;
-#[allow(dead_code)]
 const CMD_SET_RADIO_PARAMS: u8 = 11;
 const CMD_SET_RADIO_TX_POWER: u8 = 12;
 #[allow(dead_code)]
@@ -68,6 +67,7 @@ const CMD_SEND_CONTROL_DATA: u8 = 55;
 const CMD_GET_STATS: u8 = 56;
 const CMD_SET_AUTOADD_CONFIG: u8 = 58;
 const CMD_GET_AUTOADD_CONFIG: u8 = 59;
+const CMD_SET_PATH_HASH_MODE: u8 = 61;
 
 /// Destination type for commands
 #[derive(Debug, Clone)]
@@ -437,6 +437,44 @@ impl CommandHandler {
     pub async fn set_tx_power(&self, power: u8) -> Result<MeshCoreEvent> {
         let data = [CMD_SET_RADIO_TX_POWER, power];
         self.send_checked(&data).await
+    }
+
+    /// Set radio parameters, with the frequency in kHz and the bandwidth in Hz
+    ///
+    /// As of firmware version `companion-v1.13.0`, the command also sets
+    /// client repeat.  Older firmware ignores `repeat`.
+    ///
+    /// As of firmware version `companion-v1.17.1`, the device accepts `freq`
+    /// 150000 to 2500000, `bw` 7000 to 500000, `sf` 5 to 12, and `cr` 5 to 8.
+    ///
+    /// Format: [CMD_SET_RADIO_PARAMS=0x0B][freq: u32][bw: u32][sf: u8][cr: u8][repeat: u8]
+    pub async fn set_radio_params(
+        &self,
+        freq: u32,
+        bw: u32,
+        sf: u8,
+        cr: u8,
+        repeat: bool,
+    ) -> Result<()> {
+        let mut data = vec![CMD_SET_RADIO_PARAMS];
+        data.extend_from_slice(&freq.to_le_bytes());
+        data.extend_from_slice(&bw.to_le_bytes());
+        data.extend_from_slice(&[sf, cr, repeat.into()]);
+        self.send_checked(&data).await?;
+        Ok(())
+    }
+
+    /// Set the path hash mode, which is the path hash size in bytes less one,
+    /// as in [`DeviceInfoData::path_hash_mode`]
+    ///
+    /// As of firmware version `companion-v1.17.1`, the device accepts modes
+    /// 0 to 2.
+    ///
+    /// Format: [CMD_SET_PATH_HASH_MODE=0x3D][reserved: 0][mode: u8]
+    pub async fn set_path_hash_mode(&self, mode: u8) -> Result<()> {
+        let data = [CMD_SET_PATH_HASH_MODE, 0, mode];
+        self.send_checked(&data).await?;
+        Ok(())
     }
 
     /// Send advertisement
@@ -1532,6 +1570,7 @@ mod tests {
         assert_eq!(CMD_SET_ADVERT_NAME, 8);
         assert_eq!(CMD_ADD_UPDATE_CONTACT, 9);
         assert_eq!(CMD_SYNC_NEXT_MESSAGE, 10);
+        assert_eq!(CMD_SET_RADIO_PARAMS, 11);
         assert_eq!(CMD_SET_RADIO_TX_POWER, 12);
         assert_eq!(CMD_SET_ADVERT_LATLON, 14);
         assert_eq!(CMD_REMOVE_CONTACT, 15);
@@ -1555,6 +1594,7 @@ mod tests {
         assert_eq!(CMD_FACTORY_RESET, 51);
         assert_eq!(CMD_PATH_DISCOVERY, 52);
         assert_eq!(CMD_SEND_CONTROL_DATA, 55);
+        assert_eq!(CMD_SET_PATH_HASH_MODE, 61);
     }
 
     // ========== CommandHandler Tests with Mock Infrastructure ==========
@@ -1904,6 +1944,78 @@ mod tests {
 
         let result = handler.set_tx_power(20).await;
         assert!(result.is_ok());
+    }
+
+    /// Answer frames with `event` and return the frames
+    fn answer(
+        mut rx: mpsc::Receiver<Vec<u8>>,
+        dispatcher: Arc<EventDispatcher>,
+        event: MeshCoreEvent,
+    ) -> tokio::task::JoinHandle<Vec<Vec<u8>>> {
+        tokio::spawn(async move {
+            let mut frames = Vec::new();
+            while let Some(frame) = rx.recv().await {
+                frames.push(frame);
+                dispatcher.emit(event.clone()).await;
+            }
+            frames
+        })
+    }
+
+    #[tokio::test]
+    async fn set_radio_params_wire_format() {
+        let (handler, rx, dispatcher) = create_test_handler();
+        let frames = answer(rx, dispatcher, MeshCoreEvent::ok());
+
+        for repeat in [false, true] {
+            handler
+                .set_radio_params(869_525, 250_000, 11, 5, repeat)
+                .await
+                .unwrap();
+        }
+        drop(handler);
+
+        let mut off = vec![CMD_SET_RADIO_PARAMS];
+        off.extend_from_slice(&869_525u32.to_le_bytes());
+        off.extend_from_slice(&250_000u32.to_le_bytes());
+        off.extend_from_slice(&[11, 5]);
+        let mut on = off.clone();
+        off.push(0);
+        on.push(1);
+        assert_eq!(frames.await.unwrap(), vec![off, on]);
+    }
+
+    #[tokio::test]
+    async fn set_path_hash_mode_wire_format() {
+        let (handler, rx, dispatcher) = create_test_handler();
+        let frames = answer(rx, dispatcher, MeshCoreEvent::ok());
+
+        handler.set_path_hash_mode(1).await.unwrap();
+        drop(handler);
+
+        let want = vec![vec![CMD_SET_PATH_HASH_MODE, 0, 1]];
+        assert_eq!(frames.await.unwrap(), want);
+    }
+
+    #[tokio::test]
+    async fn setters_return_device_errors() {
+        let (handler, rx, dispatcher) = create_test_handler();
+        let _frames = answer(rx, dispatcher, MeshCoreEvent::error("bad"));
+        let bad = |r: Result<()>| matches!(r, Err(Error::Device(m)) if m == "bad");
+
+        assert!(bad(handler.set_time(1).await.map(drop)));
+        assert!(bad(handler.set_name("n").await.map(drop)));
+        assert!(bad(handler.set_coords(1.0, 2.0).await.map(drop)));
+        assert!(bad(handler.set_tx_power(20).await.map(drop)));
+        let r = handler
+            .set_radio_params(869_525, 250_000, 11, 5, false)
+            .await;
+        assert!(bad(r));
+        assert!(bad(handler.set_path_hash_mode(1).await));
+        assert!(bad(handler
+            .set_channel(1, "c", &[0; CHANNEL_SECRET_LEN])
+            .await));
+        assert!(bad(handler.import_private_key(&[0; 64]).await));
     }
 
     #[tokio::test]
