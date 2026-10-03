@@ -12,7 +12,7 @@ use crate::events::{
     StatusData, TraceHop, TraceInfo,
 };
 use crate::packets::{PayloadType, RouteType};
-use crate::{Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN};
+use crate::{Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
 
 /// Read a little-endian u16 from a byte slice
 pub fn read_u16_le(data: &[u8], offset: usize) -> Result<u16> {
@@ -125,7 +125,7 @@ pub fn parse_contact(data: &[u8]) -> Result<Contact> {
         )));
     }
 
-    let public_key: [u8; 32] = read_bytes(data, 0)?;
+    let public_key: [u8; PUBLIC_KEY_LEN] = read_bytes(data, 0)?;
     let contact_type = data[32];
     let flags = data[33];
     let path_len = data[34] as i8;
@@ -181,7 +181,7 @@ pub fn parse_self_info(data: &[u8]) -> Result<SelfInfo> {
     let tx_power = data[1];
     let max_tx_power = data[2]; // jonesy:allow(bounds)
 
-    let public_key: [u8; 32] = read_bytes(data, 3)?;
+    let public_key: [u8; PUBLIC_KEY_LEN] = read_bytes(data, 3)?;
 
     let adv_lat = read_i32_le(data, 35)?;
     let adv_lon = read_i32_le(data, 39)?;
@@ -704,7 +704,6 @@ pub fn parse_mesh_packet_header(data: &[u8]) -> Result<(MeshPacketHeader, &[u8])
     Ok((header, &data[offset..]))
 }
 
-const PUBLIC_KEY_LEN: usize = 32;
 const TIMESTAMP_LEN: usize = 4;
 const SIGNATURE_LEN: usize = 64;
 const FLAGS_LEN: usize = 1;
@@ -733,7 +732,7 @@ pub fn parse_raw_advertisement(data: &[u8]) -> Result<RawAdvertisement> {
         return Err(Error::protocol("RawAdvertisement payload too short"));
     }
 
-    let public_key: [u8; 32] = read_bytes(data, 0)?;
+    let public_key: [u8; PUBLIC_KEY_LEN] = read_bytes(data, 0)?;
     let timestamp = read_u32_le(data, TIMESTAMP_OFFSET)?;
     let signature: [u8; 64] = read_bytes(data, SIGNATURE_OFFSET)?;
     let flags = *data
@@ -826,8 +825,6 @@ pub fn hex_encode(data: &[u8]) -> String {
 
 /// Length of the request tag echoed back in the response.
 const ADVERT_RESP_TAG_LEN: usize = 4;
-/// Length of the 32-byte public key of the advertiser.
-const ADVERT_RESP_PUBKEY_LEN: usize = 32;
 /// Length of the advertisement type field.
 const ADVERT_RESP_ADV_TYPE_LEN: usize = 1;
 /// Fixed width of the node name field (padded / null-terminated).
@@ -839,7 +836,7 @@ const ADVERT_RESP_FLAGS_LEN: usize = 1;
 
 const ADVERT_RESP_TAG_OFFSET: usize = 0;
 const ADVERT_RESP_PUBKEY_OFFSET: usize = ADVERT_RESP_TAG_OFFSET + ADVERT_RESP_TAG_LEN;
-const ADVERT_RESP_ADV_TYPE_OFFSET: usize = ADVERT_RESP_PUBKEY_OFFSET + ADVERT_RESP_PUBKEY_LEN;
+const ADVERT_RESP_ADV_TYPE_OFFSET: usize = ADVERT_RESP_PUBKEY_OFFSET + PUBLIC_KEY_LEN;
 const ADVERT_RESP_NODE_NAME_OFFSET: usize = ADVERT_RESP_ADV_TYPE_OFFSET + ADVERT_RESP_ADV_TYPE_LEN;
 const ADVERT_RESP_TIMESTAMP_OFFSET: usize =
     ADVERT_RESP_NODE_NAME_OFFSET + ADVERT_RESP_NODE_NAME_LEN;
@@ -875,7 +872,7 @@ pub fn parse_advert_response(payload: &[u8]) -> Result<AdvertResponseData> {
     }
 
     let tag: [u8; 4] = read_bytes(payload, ADVERT_RESP_TAG_OFFSET)?;
-    let pubkey: [u8; 32] = read_bytes(payload, ADVERT_RESP_PUBKEY_OFFSET)?;
+    let pubkey: [u8; PUBLIC_KEY_LEN] = read_bytes(payload, ADVERT_RESP_PUBKEY_OFFSET)?;
     let adv_type = payload[ADVERT_RESP_ADV_TYPE_OFFSET]; // jonesy:allow(bounds) -- checked >= ADVERT_RESP_MIN_LEN above
     let node_name = read_string(
         payload,
@@ -1182,34 +1179,13 @@ pub fn parse_advertisement(payload: &[u8]) -> Result<AdvertisementData> {
     })
 }
 
-// --- PathUpdate payload layout ---
-
-/// Minimum length for a PathUpdate payload (prefix + path_len byte).
-const PATH_UPDATE_MIN_LEN: usize = 7;
-const PATH_UPDATE_PATH_LEN_OFFSET: usize = 6;
-const PATH_UPDATE_PATH_OFFSET: usize = 7;
-
 /// Parse a [`PathUpdateData`] from a `PacketType::PathUpdate` payload.
 ///
 /// Returns an error if the payload is too short.
 pub fn parse_path_update(payload: &[u8]) -> Result<PathUpdateData> {
-    if payload.len() < PATH_UPDATE_MIN_LEN {
-        return Err(Error::protocol("PathUpdate payload too short"));
-    }
-
-    let prefix: [u8; 6] = read_bytes(payload, 0)?;
-    let path_len = payload[PATH_UPDATE_PATH_LEN_OFFSET] as i8; // jonesy:allow(bounds) -- checked >= PATH_UPDATE_MIN_LEN above
-    let path = if payload.len() > PATH_UPDATE_PATH_OFFSET {
-        payload[PATH_UPDATE_PATH_OFFSET..].to_vec()
-    } else {
-        Vec::new()
-    };
-
-    Ok(PathUpdateData {
-        prefix,
-        path_len,
-        path,
-    })
+    read_bytes(payload, 0)
+        .map(PathUpdateData::from)
+        .map_err(|_| Error::protocol("PathUpdate payload too short"))
 }
 
 // --- TraceData payload layout ---
@@ -1243,7 +1219,7 @@ const DISCOVER_ENTRY_LEN: usize = 64;
 /// Minimum readable portion of an entry (pubkey + at least some name).
 const DISCOVER_ENTRY_MIN_LEN: usize = 38;
 /// Offset of the name within an entry.
-const DISCOVER_NAME_OFFSET: usize = 32;
+const DISCOVER_NAME_OFFSET: usize = PUBLIC_KEY_LEN;
 /// Maximum name length in a discover entry.
 const DISCOVER_NAME_LEN: usize = 32;
 
@@ -2345,7 +2321,7 @@ mod tests {
     fn build_advert_response_payload() -> Vec<u8> {
         let mut data = Vec::new();
         data.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]); // tag
-        data.extend_from_slice(&[0xAA; 32]); // pubkey
+        data.extend_from_slice(&[0xAA; PUBLIC_KEY_LEN]);
         data.push(2); // adv_type
         let mut name = [0u8; 32];
         name[..5].copy_from_slice(b"TestN");
@@ -2373,7 +2349,7 @@ mod tests {
 
         let resp = parse_advert_response(&data).unwrap();
         assert_eq!(resp.tag, [0x01, 0x02, 0x03, 0x04]);
-        assert_eq!(resp.pubkey, [0xAA; 32]);
+        assert_eq!(resp.pubkey, [0xAA; PUBLIC_KEY_LEN]);
         assert_eq!(resp.adv_type, 2);
         assert_eq!(resp.node_name, "TestN");
         assert_eq!(resp.timestamp, 1700000000);
@@ -2756,35 +2732,14 @@ mod tests {
     #[test]
     fn test_parse_path_update_too_short() {
         assert!(parse_path_update(&[]).is_err());
-        assert!(parse_path_update(&[0; 6]).is_err());
+        assert!(parse_path_update(&[0; PUBLIC_KEY_LEN - 1]).is_err());
     }
 
     #[test]
-    fn test_parse_path_update_no_path() {
-        let mut data = vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66]; // prefix
-        data.push(0x03); // path_len = 3
-        let update = parse_path_update(&data).unwrap();
-        assert_eq!(update.prefix, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        assert_eq!(update.path_len, 3);
-        assert!(update.path.is_empty());
-    }
-
-    #[test]
-    fn test_parse_path_update_with_path() {
-        let mut data = vec![0xAA; 6]; // prefix
-        data.push(0x02); // path_len = 2
-        data.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
-        let update = parse_path_update(&data).unwrap();
-        assert_eq!(update.path_len, 2);
-        assert_eq!(update.path, vec![0xDE, 0xAD, 0xBE, 0xEF]);
-    }
-
-    #[test]
-    fn test_parse_path_update_negative_path_len() {
-        let mut data = vec![0xBB; 6]; // prefix
-        data.push(0xFF); // path_len as i8 = -1 (flood)
-        let update = parse_path_update(&data).unwrap();
-        assert_eq!(update.path_len, -1);
+    fn test_parse_path_update() {
+        let key: [u8; PUBLIC_KEY_LEN] = std::array::from_fn(|i| i as u8);
+        let update = parse_path_update(&key).unwrap();
+        assert_eq!(update.public_key, key);
     }
 
     // ========== parse_trace_data tests ==========
@@ -2838,13 +2793,13 @@ mod tests {
 
     #[test]
     fn test_parse_discover_response_single_entry() {
-        let mut data = vec![0xAA; 32]; // pubkey
+        let mut data = vec![0xAA; PUBLIC_KEY_LEN];
         let mut name = [0u8; 32];
         name[..5].copy_from_slice(b"Peer1");
         data.extend_from_slice(&name);
         let entries = parse_discover_response(&data);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].pubkey, vec![0xAA; 32]);
+        assert_eq!(entries[0].pubkey, vec![0xAA; PUBLIC_KEY_LEN]);
         assert_eq!(entries[0].name, "Peer1");
     }
 
@@ -2852,12 +2807,12 @@ mod tests {
     fn test_parse_discover_response_multiple_entries() {
         let mut data = Vec::new();
         // Entry 1
-        data.extend_from_slice(&[0x11; 32]);
+        data.extend_from_slice(&[0x11; PUBLIC_KEY_LEN]);
         let mut name1 = [0u8; 32];
         name1[..2].copy_from_slice(b"A1");
         data.extend_from_slice(&name1);
         // Entry 2
-        data.extend_from_slice(&[0x22; 32]);
+        data.extend_from_slice(&[0x22; PUBLIC_KEY_LEN]);
         let mut name2 = [0u8; 32];
         name2[..2].copy_from_slice(b"B2");
         data.extend_from_slice(&name2);
