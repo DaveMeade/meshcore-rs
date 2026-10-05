@@ -380,6 +380,15 @@ impl MessageReader {
                 self.dispatcher.emit(event).await;
             }
 
+            PacketType::ChannelDataRecv => {
+                let datagram = parse_channel_data(payload)?;
+                let event = MeshCoreEvent::new(
+                    EventType::ChannelDataRecv,
+                    EventPayload::ChannelData(datagram),
+                );
+                self.dispatcher.emit(event).await;
+            }
+
             PacketType::NoMoreMsgs => {
                 let event = MeshCoreEvent::new(EventType::NoMoreMessages, EventPayload::None);
                 self.dispatcher.emit(event).await;
@@ -1740,6 +1749,36 @@ mod tests {
                 assert_eq!(msg.text, "Channel msg");
             }
             _ => panic!("Expected ChannelMessage payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_rx_channel_data_recv() {
+        let (reader, dispatcher) = create_reader();
+        let mut receiver = dispatcher.receiver();
+
+        let mut data = vec![PacketType::ChannelDataRecv as u8, 40, 0x00, 0x00];
+        data.push(6); // channel_idx
+        data.push(2); // path_len
+        data.extend_from_slice(&0xFF42u16.to_le_bytes());
+        data.push(2); // data_len
+        data.extend_from_slice(&[0xDE, 0xAD]);
+
+        reader.handle_rx(data).await.unwrap();
+
+        let event = tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(event.event_type, EventType::ChannelDataRecv);
+        match event.payload {
+            EventPayload::ChannelData(datagram) => {
+                assert_eq!(datagram.channel_idx, 6);
+                assert_eq!(datagram.data_type, 0xFF42);
+                assert_eq!(datagram.data, vec![0xDE, 0xAD]);
+            }
+            _ => panic!("Expected ChannelData payload"),
         }
     }
 

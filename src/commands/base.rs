@@ -916,6 +916,7 @@ impl CommandHandler {
     /// The caller should check `event.event_type` to determine the message type:
     /// - `EventType::ContactMsgRecv` → `EventPayload::ContactMessage(msg)`
     /// - `EventType::ChannelMsgRecv` → `EventPayload::ChannelMessage(msg)`
+    /// - `EventType::ChannelDataRecv` → `EventPayload::ChannelData(datagram)`
     pub async fn get_msg(&self) -> Result<Option<MeshCoreEvent>> {
         self.get_msg_with_timeout(self.default_timeout).await
     }
@@ -931,6 +932,7 @@ impl CommandHandler {
                 &[
                     EventType::ContactMsgRecv,
                     EventType::ChannelMsgRecv,
+                    EventType::ChannelDataRecv,
                     EventType::NoMoreMessages,
                     EventType::Error,
                 ],
@@ -939,7 +941,9 @@ impl CommandHandler {
             .await?;
 
         match event.event_type {
-            EventType::ContactMsgRecv | EventType::ChannelMsgRecv => Ok(Some(event)),
+            EventType::ContactMsgRecv | EventType::ChannelMsgRecv | EventType::ChannelDataRecv => {
+                Ok(Some(event))
+            }
             EventType::NoMoreMessages => Ok(None),
             EventType::Error => match event.payload {
                 EventPayload::String(msg) => Err(Error::device(msg)),
