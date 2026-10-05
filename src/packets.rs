@@ -29,6 +29,7 @@ pub enum PacketType {
     CustomVars = 21,
     Stats = 24,
     AutoaddConfig = 25,
+    ChannelDataRecv = 27,
 
     // Binary/Control (50-55)
     BinaryReq = 50,
@@ -86,6 +87,7 @@ impl From<u8> for PacketType {
             21 => PacketType::CustomVars,
             24 => PacketType::Stats,
             25 => PacketType::AutoaddConfig,
+            27 => PacketType::ChannelDataRecv,
             50 => PacketType::BinaryReq,
             51 => PacketType::FactoryReset,
             52 => PacketType::PathDiscovery,
@@ -320,6 +322,7 @@ mod tests {
         assert_eq!(PacketType::from(21), PacketType::CustomVars);
         assert_eq!(PacketType::from(24), PacketType::Stats);
         assert_eq!(PacketType::from(25), PacketType::AutoaddConfig);
+        assert_eq!(PacketType::from(27), PacketType::ChannelDataRecv);
     }
 
     #[test]

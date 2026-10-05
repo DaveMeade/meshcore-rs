@@ -5,11 +5,11 @@ use std::ops::Range;
 
 use crate::error::Error;
 use crate::events::{
-    AclEntry, AdvertResponseData, AdvertisementData, BatteryInfo, ChannelInfoData, ChannelMessage,
-    Contact, ContactMessage, CoreStatsData, DeviceInfoData, DiscoverEntry, MeshPacketHeader,
-    MmaEntry, MsgSentInfo, Neighbour, NeighboursData, PacketStatsData, PathDiscoveryResponseData,
-    PathUpdateData, RadioStatsData, RawAdvertisement, SelfInfo, StatsCategory, StatsData,
-    StatusData, TraceHop, TraceInfo,
+    AclEntry, AdvertResponseData, AdvertisementData, BatteryInfo, ChannelData, ChannelInfoData,
+    ChannelMessage, Contact, ContactMessage, CoreStatsData, DeviceInfoData, DiscoverEntry,
+    MeshPacketHeader, MmaEntry, MsgSentInfo, Neighbour, NeighboursData, PacketStatsData,
+    PathDiscoveryResponseData, PathUpdateData, RadioStatsData, RawAdvertisement, SelfInfo,
+    StatsCategory, StatsData, StatusData, TraceHop, TraceInfo,
 };
 use crate::packets::{PayloadType, RouteType};
 use crate::{Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
@@ -483,6 +483,32 @@ pub fn parse_channel_msg(data: &[u8]) -> Result<ChannelMessage> {
         sender_timestamp,
         text,
         snr: None,
+    })
+}
+
+/// Parse a channel datagram (RESP_CODE_CHANNEL_DATA_RECV)
+///
+/// Layout: [snr*4: i8][reserved: 2][channel_idx][path_len][data_type: u16 LE][data_len][data]
+pub fn parse_channel_data(data: &[u8]) -> Result<ChannelData> {
+    if data.len() < 8 {
+        return Err(Error::protocol("Channel data too short"));
+    }
+
+    let snr = data[0] as i8 as f32 / 4.0;
+    let channel_idx = data[3];
+    let path_len = data[4];
+    let data_type = read_u16_le(data, 5)?;
+    let data_len = data[7] as usize;
+    let payload = data
+        .get(8..8 + data_len)
+        .ok_or_else(|| Error::protocol("Channel data truncated"))?;
+
+    Ok(ChannelData {
+        channel_idx,
+        path_len,
+        data_type,
+        data: payload.to_vec(),
+        snr,
     })
 }
 
@@ -1969,6 +1995,31 @@ mod tests {
         assert_eq!(msg.channel_idx, 5);
         assert_eq!(msg.path_len, 2);
         assert_eq!(msg.text, "V3 chan");
+    }
+
+    #[test]
+    fn test_parse_channel_data() {
+        let mut data = vec![40, 0x00, 0x00]; // snr_raw = 40, SNR = 10.0, reserved
+        data.push(6); // channel_idx
+        data.push(0xFF); // direct
+        data.extend_from_slice(&0xFF42u16.to_le_bytes());
+        data.push(3); // data_len
+        data.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // one trailing byte ignored
+
+        let datagram = parse_channel_data(&data).unwrap();
+        assert_eq!(datagram.snr, 10.0);
+        assert_eq!(datagram.channel_idx, 6);
+        assert_eq!(datagram.path_len, 0xFF);
+        assert_eq!(datagram.data_type, 0xFF42);
+        assert_eq!(datagram.data, vec![0xDE, 0xAD, 0xBE]);
+    }
+
+    #[test]
+    fn test_parse_channel_data_too_short_or_truncated() {
+        assert!(parse_channel_data(&[0u8; 7]).is_err());
+        let mut data = vec![0u8; 8];
+        data[7] = 2; // data_len with no data behind it
+        assert!(parse_channel_data(&data).is_err());
     }
 
     #[test]
