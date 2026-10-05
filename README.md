@@ -192,6 +192,7 @@ traffic never triggers it; use `LogData` for general monitoring as above.
 - `get_msg()` - Get next message from queue
 - `send_msg()` - Send a direct message
 - `send_chan_msg()` - Send a channel message
+- `send_channel_data()` - Send a binary datagram on a channel
 - `send_login()` / `send_logout()` - Login/logout to remote node
 
 ### Binary Protocol Commands
@@ -236,7 +237,6 @@ assumed).
 | 57 (0x39) | `SEND_ANON_REQ` | Request to a peer that isn't (yet) a known contact | companion-v1.12.0 | ✅ `send_anon_req()` |
 | 60 (0x3C) | `GET_ALLOWED_REPEAT_FREQ` | Frequency ranges a repeater is allowed to retransmit on | companion-v1.13.0 | ✅ `get_allowed_repeat_freq()` |
 | 61 (0x3D) | `SET_PATH_HASH_MODE` | Path-hash size mode used when building routes | companion-v1.14.0 | ✅ `set_path_hash_mode()`/`get_path_hash_mode()` |
-| 62 (0x3E) | `SEND_CHANNEL_DATA` | Send a raw datagram on a group/channel | companion-v1.15.0 | ❌ not found in `meshcore_py` either |
 | 63 (0x3F) | `SET_DEFAULT_FLOOD_SCOPE` | Default flood-scope (region) applied when none is given | companion-v1.15.0 | ✅ `set_default_flood_scope()` |
 | 64 (0x40) | `GET_DEFAULT_FLOOD_SCOPE` | Read the currently configured default flood-scope | companion-v1.15.0 | ✅ `get_default_flood_scope()` |
 | 65 (0x41) | `SEND_RAW_PACKET` | Inject a raw, fully-formed mesh packet directly onto the radio | companion-v1.16.0 | ❌ not found in `meshcore_py` either |
