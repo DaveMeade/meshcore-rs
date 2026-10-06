@@ -116,7 +116,13 @@ pub fn read_bytes<const N: usize>(data: &[u8], offset: usize) -> Result<[u8; N]>
     Ok(arr)
 }
 
-/// Parse a contact from raw bytes (149 bytes)
+/// Where `lastmod` sits in the firmware's contact frame (`writeContactRespFrame`):
+/// the last field, so the frame is 147 payload bytes.
+const CONTACT_LASTMOD_OFFSET: usize = 143;
+const CONTACT_LEN_WITH_LASTMOD: usize = CONTACT_LASTMOD_OFFSET + 4;
+
+/// Parse a contact from raw bytes. A frame from firmware older than `lastmod`
+/// is 145 bytes and reads `lastmod` as 0.
 pub fn parse_contact(data: &[u8]) -> Result<Contact> {
     if data.len() < 145 {
         return Err(Error::protocol(format!(
@@ -146,9 +152,8 @@ pub fn parse_contact(data: &[u8]) -> Result<Contact> {
     let adv_lat = read_i32_le(data, 135)?;
     let adv_lon = read_i32_le(data, 139)?;
 
-    // The last modification timestamp is optional (4 bytes at offset 143)
-    let last_modification_timestamp = if data.len() >= 149 {
-        read_u32_le(data, 143).unwrap_or(0)
+    let last_modification_timestamp = if data.len() >= CONTACT_LEN_WITH_LASTMOD {
+        read_u32_le(data, CONTACT_LASTMOD_OFFSET).unwrap_or(0)
     } else {
         0
     };
@@ -1769,8 +1774,8 @@ mod tests {
 
     #[test]
     fn test_parse_contact() {
-        // Create a minimal valid contact buffer (145+ bytes)
-        let mut data = vec![0u8; 149];
+        // The firmware's frame: lastmod is the last field.
+        let mut data = vec![0u8; CONTACT_LEN_WITH_LASTMOD];
         // Public key (32 bytes)
         data[0..6].copy_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
         // contact_type
@@ -1789,8 +1794,9 @@ mod tests {
         data[135..139].copy_from_slice(&37774900i32.to_le_bytes());
         // adv_lon (at 139, 4 bytes)
         data[139..143].copy_from_slice(&(-122419400i32).to_le_bytes());
-        // last_modification_timestamp (at 143, 4 bytes)
-        data[143..147].copy_from_slice(&2000u32.to_le_bytes());
+        // last_modification_timestamp
+        data[CONTACT_LASTMOD_OFFSET..CONTACT_LEN_WITH_LASTMOD]
+            .copy_from_slice(&2000u32.to_le_bytes());
 
         let contact = parse_contact(&data).unwrap();
         assert_eq!(contact.contact_type, 1);
@@ -1802,6 +1808,16 @@ mod tests {
         assert_eq!(contact.adv_lat, 37774900);
         assert_eq!(contact.adv_lon, -122419400);
         assert_eq!(contact.last_modification_timestamp, 2000);
+    }
+
+    #[test]
+    fn test_parse_contact_without_lastmod_reads_zero() {
+        let mut data = vec![0u8; 145];
+        data[32] = 1;
+        data[131..135].copy_from_slice(&1000u32.to_le_bytes());
+
+        let contact = parse_contact(&data).unwrap();
+        assert_eq!(contact.last_modification_timestamp, 0);
     }
 
     #[test]
