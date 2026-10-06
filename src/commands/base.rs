@@ -2538,6 +2538,9 @@ mod tests {
     #[tokio::test]
     async fn test_send_channel_data_wire_format() {
         let (handler, mut rx, dispatcher) = create_test_handler();
+        // A payload at the cap exactly
+        let data: Vec<u8> = (0..MAX_CHANNEL_DATA_LEN).map(|i| i as u8).collect();
+        let expected = data.clone();
 
         let dispatcher_clone = dispatcher.clone();
         tokio::spawn(async move {
@@ -2546,17 +2549,14 @@ mod tests {
             assert_eq!(sent[1], 3); // channel_idx
             assert_eq!(sent[2], PATH_LEN_FLOOD);
             assert_eq!(&sent[3..5], &0xFF42u16.to_le_bytes());
-            assert_eq!(&sent[5..], &[0xDE, 0xAD]);
+            assert_eq!(&sent[5..], &expected[..]);
 
             dispatcher_clone
                 .emit(MeshCoreEvent::new(EventType::Ok, EventPayload::None))
                 .await;
         });
 
-        handler
-            .send_channel_data(3, 0xFF42, &[0xDE, 0xAD])
-            .await
-            .unwrap();
+        handler.send_channel_data(3, 0xFF42, &data).await.unwrap();
     }
 
     #[tokio::test]

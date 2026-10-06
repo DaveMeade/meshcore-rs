@@ -74,8 +74,9 @@ pub const CHANNEL_NAME_LEN: usize = 32;
 pub const CHANNEL_SECRET_LEN: usize = 16;
 /// Total length of channel info payload (idx + name + secret)
 pub const CHANNEL_INFO_LEN: usize = 1 + CHANNEL_NAME_LEN + CHANNEL_SECRET_LEN;
-/// The most bytes a channel datagram may carry (`MAX_GROUP_DATA_LENGTH` in the firmware)
-pub const MAX_CHANNEL_DATA_LEN: usize = 165;
+/// The most bytes a channel datagram's payload may carry (`MAX_CHANNEL_DATA_LENGTH` in the
+/// firmware: the 165-byte group datagram less the two-byte `data_type`)
+pub const MAX_CHANNEL_DATA_LEN: usize = 163;
 
 // Auto-add-contacts config bits (`CommandHandler::get_autoadd_config`/
 // `set_autoadd_config`'s `config` byte). Matches firmware's
