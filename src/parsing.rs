@@ -1495,6 +1495,8 @@ const PATH_DISC_MIN_LEN: usize = PATH_DISC_RESERVED_LEN + PATH_DISC_PREFIX_LEN +
 const PATH_DISC_PREFIX_OFFSET: usize = PATH_DISC_RESERVED_LEN;
 /// Offset of the outbound path descriptor byte.
 const PATH_DISC_OUT_PATH_OFFSET: usize = PATH_DISC_PREFIX_OFFSET + PATH_DISC_PREFIX_LEN;
+/// Offset of the first outbound path data byte (immediately after the descriptor).
+const PATH_DISC_OUT_PATH_DATA_OFFSET: usize = PATH_DISC_OUT_PATH_OFFSET + 1;
 
 /// Parse a [`PathDiscoveryResponseData`] from a
 /// `PacketType::PathDiscoveryResponse` payload.
@@ -1515,9 +1517,10 @@ pub fn parse_path_discovery_response(payload: &[u8]) -> Result<PathDiscoveryResp
         .checked_mul(out_path_hash_len as usize)
         .ok_or_else(|| Error::protocol("PathDiscoveryResponse outbound path overflow"))?;
 
-    let out_path_start = PATH_DISC_OUT_PATH_OFFSET + 1; // jonesy:allow(overflow)
+    let out_path_start = PATH_DISC_OUT_PATH_DATA_OFFSET;
     let out_path_end = out_path_start
-        .checked_add(out_path_bytes)
+        // TODO: remove jonesy:allow when https://github.com/andrewdavidmackenzie/jonesy/issues/267 is fixed
+        .checked_add(out_path_bytes) // jonesy:allow(overflow) -- checked_add returns None on overflow
         .ok_or_else(|| Error::protocol("PathDiscoveryResponse outbound path overflow"))?;
     if out_path_end >= payload.len() {
         return Err(Error::protocol(
