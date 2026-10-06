@@ -486,21 +486,40 @@ pub fn parse_channel_msg(data: &[u8]) -> Result<ChannelMessage> {
     })
 }
 
+// RESP_CODE_CHANNEL_DATA_RECV layout:
+// [snr*4: i8][reserved: 2][channel_idx][path_len][data_type: u16 LE][data_len][data]
+const CHANNEL_DATA_SNR_OFFSET: usize = 0;
+const CHANNEL_DATA_RESERVED_LEN: usize = 2;
+const CHANNEL_DATA_CHANNEL_IDX_OFFSET: usize =
+    CHANNEL_DATA_SNR_OFFSET + 1 + CHANNEL_DATA_RESERVED_LEN;
+const CHANNEL_DATA_PATH_LEN_OFFSET: usize = CHANNEL_DATA_CHANNEL_IDX_OFFSET + 1;
+const CHANNEL_DATA_TYPE_OFFSET: usize = CHANNEL_DATA_PATH_LEN_OFFSET + 1;
+const CHANNEL_DATA_LEN_OFFSET: usize = CHANNEL_DATA_TYPE_OFFSET + 2;
+const CHANNEL_DATA_PAYLOAD_OFFSET: usize = CHANNEL_DATA_LEN_OFFSET + 1;
+/// Everything before the payload.
+const CHANNEL_DATA_MIN_LEN: usize = CHANNEL_DATA_PAYLOAD_OFFSET;
+
 /// Parse a channel datagram (RESP_CODE_CHANNEL_DATA_RECV)
-///
-/// Layout: [snr*4: i8][reserved: 2][channel_idx][path_len][data_type: u16 LE][data_len][data]
 pub fn parse_channel_data(data: &[u8]) -> Result<ChannelData> {
-    if data.len() < 8 {
+    if data.len() < CHANNEL_DATA_MIN_LEN {
         return Err(Error::protocol("Channel data too short"));
     }
+    let byte = |offset: usize| {
+        data.get(offset)
+            .copied()
+            .ok_or_else(|| Error::protocol("Channel data too short"))
+    };
 
-    let snr = data[0] as i8 as f32 / 4.0;
-    let channel_idx = data[3];
-    let path_len = data[4];
-    let data_type = read_u16_le(data, 5)?;
-    let data_len = data[7] as usize;
+    let snr = byte(CHANNEL_DATA_SNR_OFFSET)? as i8 as f32 / 4.0;
+    let channel_idx = byte(CHANNEL_DATA_CHANNEL_IDX_OFFSET)?;
+    let path_len = byte(CHANNEL_DATA_PATH_LEN_OFFSET)?;
+    let data_type = read_u16_le(data, CHANNEL_DATA_TYPE_OFFSET)?;
+    let data_len = usize::from(byte(CHANNEL_DATA_LEN_OFFSET)?);
+    let end = CHANNEL_DATA_PAYLOAD_OFFSET
+        .checked_add(data_len)
+        .ok_or_else(|| Error::protocol("Channel data length overflow"))?;
     let payload = data
-        .get(8..8 + data_len)
+        .get(CHANNEL_DATA_PAYLOAD_OFFSET..end)
         .ok_or_else(|| Error::protocol("Channel data truncated"))?;
 
     Ok(ChannelData {
