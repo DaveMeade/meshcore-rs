@@ -1519,7 +1519,8 @@ pub fn parse_path_discovery_response(payload: &[u8]) -> Result<PathDiscoveryResp
 
     let out_path_start = PATH_DISC_OUT_PATH_DATA_OFFSET;
     let out_path_end = out_path_start
-        .checked_add(out_path_bytes)
+        // TODO: remove jonesy:allow when https://github.com/andrewdavidmackenzie/jonesy/issues/267 is fixed
+        .checked_add(out_path_bytes) // jonesy:allow(overflow) -- checked_add returns None on overflow
         .ok_or_else(|| Error::protocol("PathDiscoveryResponse outbound path overflow"))?;
     if out_path_end >= payload.len() {
         return Err(Error::protocol(
