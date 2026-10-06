@@ -1771,8 +1771,8 @@ mod tests {
 
     #[test]
     fn test_parse_contact() {
-        // Create a minimal valid contact buffer (145+ bytes)
-        let mut data = vec![0u8; 149];
+        // The firmware's frame: lastmod is the last field.
+        let mut data = vec![0u8; CONTACT_LEN_WITH_LASTMOD];
         // Public key (32 bytes)
         data[0..6].copy_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
         // contact_type
@@ -1791,8 +1791,9 @@ mod tests {
         data[135..139].copy_from_slice(&37774900i32.to_le_bytes());
         // adv_lon (at 139, 4 bytes)
         data[139..143].copy_from_slice(&(-122419400i32).to_le_bytes());
-        // last_modification_timestamp (at 143, 4 bytes)
-        data[143..147].copy_from_slice(&2000u32.to_le_bytes());
+        // last_modification_timestamp
+        data[CONTACT_LASTMOD_OFFSET..CONTACT_LEN_WITH_LASTMOD]
+            .copy_from_slice(&2000u32.to_le_bytes());
 
         let contact = parse_contact(&data).unwrap();
         assert_eq!(contact.contact_type, 1);
@@ -1803,23 +1804,6 @@ mod tests {
         assert_eq!(contact.last_advert, 1000);
         assert_eq!(contact.adv_lat, 37774900);
         assert_eq!(contact.adv_lon, -122419400);
-        assert_eq!(contact.last_modification_timestamp, 2000);
-    }
-
-    #[test]
-    fn test_parse_contact_reads_lastmod_from_the_firmwares_147_byte_frame() {
-        // Exactly what the firmware sends: lastmod is the final field and
-        // nothing follows it.
-        let mut data = vec![0u8; CONTACT_LEN_WITH_LASTMOD];
-        data[0..6].copy_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
-        data[32] = 1;
-        data[99..104].copy_from_slice(b"Test\0");
-        data[131..135].copy_from_slice(&1000u32.to_le_bytes());
-        data[CONTACT_LASTMOD_OFFSET..CONTACT_LEN_WITH_LASTMOD]
-            .copy_from_slice(&2000u32.to_le_bytes());
-
-        let contact = parse_contact(&data).unwrap();
-        assert_eq!(contact.last_advert, 1000);
         assert_eq!(contact.last_modification_timestamp, 2000);
     }
 
