@@ -9,7 +9,9 @@ use crate::events::*;
 use crate::packets::BinaryReqType;
 use crate::parsing::{hex_decode, hex_encode, to_microdegrees};
 use crate::reader::MessageReader;
-use crate::{Error, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
+use crate::{
+    Error, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, MAX_CHANNEL_DATA_LEN, PUBLIC_KEY_LEN,
+};
 
 /// Default command timeout
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -70,8 +72,8 @@ const CMD_GET_AUTOADD_CONFIG: u8 = 59;
 const CMD_SET_PATH_HASH_MODE: u8 = 61;
 const CMD_SEND_CHANNEL_DATA: u8 = 62;
 
-/// The most bytes a channel datagram may carry (`MAX_GROUP_DATA_LENGTH` in the firmware).
-pub const MAX_CHANNEL_DATA_LEN: usize = 165;
+/// `path_len` value asking the firmware to flood rather than follow a path (`OUT_PATH_UNKNOWN`).
+const PATH_LEN_FLOOD: u8 = 0xFF;
 
 /// Destination type for commands
 #[derive(Debug, Clone)]
@@ -1050,6 +1052,9 @@ impl CommandHandler {
     /// `data_type` identifies the application (`docs/number_allocations.md` in the
     /// firmware repo); 0 is reserved. Needs companion firmware v1.15.0 or later.
     pub async fn send_channel_data(&self, channel: u8, data_type: u16, data: &[u8]) -> Result<()> {
+        if data_type == 0 {
+            return Err(Error::invalid_param("data_type 0 is reserved"));
+        }
         if data.len() > MAX_CHANNEL_DATA_LEN {
             return Err(Error::invalid_param(format!(
                 "Channel data too large: {} > {}",
@@ -1058,12 +1063,11 @@ impl CommandHandler {
             )));
         }
 
-        let mut frame = vec![CMD_SEND_CHANNEL_DATA, channel, 0xFF];
+        let mut frame = vec![CMD_SEND_CHANNEL_DATA, channel, PATH_LEN_FLOOD];
         frame.extend_from_slice(&data_type.to_le_bytes());
         frame.extend_from_slice(data);
 
-        let _ = self.send(&frame, Some(EventType::Ok)).await?;
-
+        self.send_checked(&frame).await?;
         Ok(())
     }
 
@@ -2451,7 +2455,7 @@ mod tests {
             let sent = rx.recv().await.unwrap();
             assert_eq!(sent[0], CMD_SEND_CHANNEL_DATA);
             assert_eq!(sent[1], 3); // channel_idx
-            assert_eq!(sent[2], 0xFF); // flood
+            assert_eq!(sent[2], PATH_LEN_FLOOD);
             assert_eq!(&sent[3..5], &0xFF42u16.to_le_bytes());
             assert_eq!(&sent[5..], &[0xDE, 0xAD]);
 
@@ -2467,10 +2471,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_channel_data_rejects_oversize() {
+    async fn test_send_channel_data_rejects_oversize_and_reserved_type() {
         let (handler, _rx, _dispatcher) = create_test_handler();
         let data = vec![0u8; MAX_CHANNEL_DATA_LEN + 1];
         assert!(handler.send_channel_data(0, 1, &data).await.is_err());
+        assert!(handler.send_channel_data(0, 0, &[0xDE]).await.is_err());
     }
 
     #[tokio::test]

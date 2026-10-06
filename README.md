@@ -193,7 +193,7 @@ traffic never triggers it; use `LogData` for general monitoring as above.
 
 - `get_msg()` - Get next message from queue
 - `send_msg()` - Send a direct message
-- `send_chan_msg()` - Send a channel message
+- `send_channel_msg()` - Send a channel message
 - `send_channel_data()` - Send a binary datagram on a channel
 - `send_login()` / `send_logout()` - Login/logout to remote node
 
