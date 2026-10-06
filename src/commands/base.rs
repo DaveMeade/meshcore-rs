@@ -58,6 +58,7 @@ const CMD_SET_CHANNEL: u8 = 32;
 const CMD_SIGN_START: u8 = 33;
 const CMD_SIGN_DATA: u8 = 34;
 const CMD_SIGN_FINISH: u8 = 35;
+const CMD_SET_OTHER_PARAMS: u8 = 38;
 const CMD_GET_CUSTOM_VARS: u8 = 40;
 const CMD_SET_CUSTOM_VAR: u8 = 41;
 const CMD_SEND_BINARY_REQ: u8 = 50;
@@ -170,6 +171,17 @@ impl From<&Contact> for Destination {
     fn from(c: &Contact) -> Self {
         Destination::Contact(c.clone())
     }
+}
+
+/// The node parameters [`CommandHandler::set_other_params`] writes together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OtherParams {
+    pub manual_add_contacts: bool,
+    pub telemetry_mode_base: u8,
+    pub telemetry_mode_loc: u8,
+    pub telemetry_mode_env: u8,
+    pub advert_loc_policy: u8,
+    pub multi_acks: u8,
 }
 
 /// Command handler for MeshCore operations
@@ -433,6 +445,23 @@ impl CommandHandler {
         data.extend_from_slice(&lat_micro.to_le_bytes());
         data.extend_from_slice(&lon_micro.to_le_bytes());
         // Alt is optional, firmware handles len >= 9
+        self.send_checked(&data).await
+    }
+
+    /// Set the node's other parameters, the fields `SelfInfo` reports
+    ///
+    /// Format: [CMD_SET_OTHER_PARAMS=0x26][manual_add_contacts][telemetry: base | loc << 2 | env << 4][advert_loc_policy][multi_acks]
+    pub async fn set_other_params(&self, params: OtherParams) -> Result<MeshCoreEvent> {
+        let telemetry = (params.telemetry_mode_base & 0x03)
+            | ((params.telemetry_mode_loc & 0x03) << 2)
+            | ((params.telemetry_mode_env & 0x03) << 4);
+        let data = [
+            CMD_SET_OTHER_PARAMS,
+            u8::from(params.manual_add_contacts),
+            telemetry,
+            params.advert_loc_policy,
+            params.multi_acks,
+        ];
         self.send_checked(&data).await
     }
 
@@ -2138,6 +2167,15 @@ mod tests {
             .await));
         assert!(bad(handler.import_private_key(&[0; 64]).await));
         assert!(bad(handler.send_channel_data(1, 1, &[0xDE]).await));
+        let params = OtherParams {
+            manual_add_contacts: false,
+            telemetry_mode_base: 0,
+            telemetry_mode_loc: 0,
+            telemetry_mode_env: 0,
+            advert_loc_policy: 0,
+            multi_acks: 0,
+        };
+        assert!(bad(handler.set_other_params(params).await.map(drop)));
     }
 
     #[tokio::test]
@@ -2172,6 +2210,33 @@ mod tests {
 
         let result = handler.send_advert(false).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_set_other_params_wire_format() {
+        let (handler, mut rx, dispatcher) = create_test_handler();
+
+        let dispatcher_clone = dispatcher.clone();
+        tokio::spawn(async move {
+            let sent = rx.recv().await.unwrap();
+            assert_eq!(sent, vec![CMD_SET_OTHER_PARAMS, 1, 0b01_10_11, 1, 2]);
+
+            dispatcher_clone
+                .emit(MeshCoreEvent::new(EventType::Ok, EventPayload::None))
+                .await;
+        });
+
+        handler
+            .set_other_params(OtherParams {
+                manual_add_contacts: true,
+                telemetry_mode_base: 3,
+                telemetry_mode_loc: 2,
+                telemetry_mode_env: 1,
+                advert_loc_policy: 1,
+                multi_acks: 2,
+            })
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
