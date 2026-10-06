@@ -32,8 +32,11 @@ pub struct MessageReader {
     dispatcher: Arc<EventDispatcher>,
     /// Pending binary requests
     pending_requests: Arc<RwLock<HashMap<String, BinaryRequest>>>,
-    /// Contacts being built during the multi-packet contact list
-    pending_contacts: Arc<RwLock<Vec<Contact>>>,
+    /// Contacts being built during the multi-packet contact list. If a
+    /// contact listing is not in progress, this field is set to `None`,
+    /// which causes contacts to be immediately returned as `NextContact`
+    /// events.
+    pending_contacts: Arc<RwLock<Option<Vec<Contact>>>>,
     /// Current contact list last_modification_timestamp value
     contacts_last_modification_timestamp: Arc<RwLock<u32>>,
 }
@@ -134,7 +137,7 @@ impl MessageReader {
         Self {
             dispatcher,
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
-            pending_contacts: Arc::new(RwLock::new(Vec::new())),
+            pending_contacts: Arc::new(RwLock::new(None)),
             contacts_last_modification_timestamp: Arc::new(RwLock::new(0)),
         }
     }
@@ -282,18 +285,23 @@ impl MessageReader {
             }
 
             PacketType::ContactStart => {
-                self.pending_contacts.write().await.clear();
+                *self.pending_contacts.write().await = Some(Vec::new());
             }
 
             PacketType::Contact | PacketType::PushCodeNewAdvert => {
                 let contact = parse_contact(payload)?;
-                if packet_type == PacketType::PushCodeNewAdvert {
-                    let event =
-                        MeshCoreEvent::new(EventType::NewContact, EventPayload::Contact(contact));
-                    self.dispatcher.emit(event).await;
-                } else {
-                    self.pending_contacts.write().await.push(contact);
-                }
+                let mut pending = self.pending_contacts.write().await;
+                let event_type = match (packet_type, pending.as_mut()) {
+                    (PacketType::PushCodeNewAdvert, _) => EventType::NewContact,
+                    (_, Some(list)) => {
+                        list.push(contact);
+                        return Ok(());
+                    }
+                    (_, None) => EventType::NextContact,
+                };
+                drop(pending);
+                let event = MeshCoreEvent::new(event_type, EventPayload::Contact(contact));
+                self.dispatcher.emit(event).await;
             }
 
             PacketType::ContactEnd => {
@@ -302,7 +310,12 @@ impl MessageReader {
                 *self.contacts_last_modification_timestamp.write().await =
                     last_modification_timestamp;
 
-                let contacts = std::mem::take(&mut *self.pending_contacts.write().await);
+                let contacts = self
+                    .pending_contacts
+                    .write()
+                    .await
+                    .take()
+                    .unwrap_or_default();
                 let event =
                     MeshCoreEvent::new(EventType::Contacts, EventPayload::Contacts(contacts))
                         .with_attribute("lastmod", last_modification_timestamp.to_string());
@@ -376,6 +389,15 @@ impl MessageReader {
                 let event = MeshCoreEvent::new(
                     EventType::ChannelMsgRecv,
                     EventPayload::ChannelMessage(msg),
+                );
+                self.dispatcher.emit(event).await;
+            }
+
+            PacketType::ChannelDataRecv => {
+                let datagram = parse_channel_data(payload)?;
+                let event = MeshCoreEvent::new(
+                    EventType::ChannelDataRecv,
+                    EventPayload::ChannelData(datagram),
                 );
                 self.dispatcher.emit(event).await;
             }
@@ -720,7 +742,7 @@ mod tests {
         let (reader, _dispatcher) = create_reader();
 
         // Add some fake contacts
-        reader.pending_contacts.write().await.push(Contact {
+        *reader.pending_contacts.write().await = Some(vec![Contact {
             public_key: [0u8; PUBLIC_KEY_LEN],
             contact_type: 1,
             flags: 0,
@@ -731,7 +753,7 @@ mod tests {
             adv_lat: 0,
             adv_lon: 0,
             last_modification_timestamp: 0,
-        });
+        }]);
 
         reader
             .handle_rx(vec![PacketType::ContactStart as u8])
@@ -739,7 +761,15 @@ mod tests {
             .unwrap();
 
         // Verify pending contacts were cleared
-        assert!(reader.pending_contacts.read().await.is_empty());
+        assert_eq!(
+            reader
+                .pending_contacts
+                .read()
+                .await
+                .as_deref()
+                .map(<[_]>::len),
+            Some(0)
+        );
     }
 
     #[tokio::test]
@@ -1740,6 +1770,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_rx_channel_data_recv() {
+        let (reader, dispatcher) = create_reader();
+        let mut receiver = dispatcher.receiver();
+
+        let mut data = vec![PacketType::ChannelDataRecv as u8, 40, 0x00, 0x00];
+        data.push(6); // channel_idx
+        data.push(2); // path_len
+        data.extend_from_slice(&0xFF42u16.to_le_bytes());
+        data.push(2); // data_len
+        data.extend_from_slice(&[0xDE, 0xAD]);
+
+        reader.handle_rx(data).await.unwrap();
+
+        let event = tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(event.event_type, EventType::ChannelDataRecv);
+        match event.payload {
+            EventPayload::ChannelData(datagram) => {
+                assert_eq!(datagram.channel_idx, 6);
+                assert_eq!(datagram.data_type, 0xFF42);
+                assert_eq!(datagram.data, vec![0xDE, 0xAD]);
+            }
+            _ => panic!("Expected ChannelData payload"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_handle_rx_status_response() {
         let (reader, dispatcher) = create_reader();
         let mut receiver = dispatcher.receiver();
@@ -1837,6 +1897,29 @@ mod tests {
                 assert_eq!(contacts[0].adv_name, "Test1");
             }
             _ => panic!("Expected Contacts payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_rx_lone_contact() {
+        let (reader, dispatcher) = create_reader();
+        let mut receiver = dispatcher.receiver();
+
+        let mut data = vec![PacketType::Contact as u8];
+        let mut contact = vec![0u8; 149];
+        contact[99..104].copy_from_slice(b"Lone\0");
+        data.extend_from_slice(&contact);
+        reader.handle_rx(data).await.unwrap();
+
+        let event = tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(event.event_type, EventType::NextContact);
+        match event.payload {
+            EventPayload::Contact(c) => assert_eq!(c.adv_name, "Lone"),
+            _ => panic!("Expected Contact payload"),
         }
     }
 
@@ -2217,7 +2300,7 @@ mod tests {
         let mut receiver = dispatcher.receiver();
 
         // Add a pending contact first
-        reader.pending_contacts.write().await.push(Contact {
+        *reader.pending_contacts.write().await = Some(vec![Contact {
             public_key: [0u8; PUBLIC_KEY_LEN],
             contact_type: 1,
             flags: 0,
@@ -2228,7 +2311,7 @@ mod tests {
             adv_lat: 0,
             adv_lon: 0,
             last_modification_timestamp: 0,
-        });
+        }]);
 
         let mut data = vec![PacketType::ContactEnd as u8];
         data.extend_from_slice(&1234567890u32.to_le_bytes());

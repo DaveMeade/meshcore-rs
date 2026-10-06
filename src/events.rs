@@ -43,6 +43,7 @@ pub enum EventType {
     // Messaging events
     ContactMsgRecv,
     ChannelMsgRecv,
+    ChannelDataRecv,
     MsgSent,
     NoMoreMessages,
     ContactUri,
@@ -108,6 +109,8 @@ pub enum EventPayload {
     ContactMessage(ContactMessage),
     /// Channel message received (message on a group channel)
     ChannelMessage(ChannelMessage),
+    /// Binary datagram received on a group channel
+    ChannelData(ChannelData),
     /// Message sent acknowledgement
     MsgSent(MsgSentInfo),
     /// Status response
@@ -372,6 +375,21 @@ impl ChannelMessage {
         bytes[4..8].copy_from_slice(&self.sender_timestamp.to_be_bytes());
         u64::from_be_bytes(bytes)
     }
+}
+
+/// Binary datagram received on a group channel (`RESP_CODE_CHANNEL_DATA_RECV`)
+#[derive(Debug, Clone)]
+pub struct ChannelData {
+    /// Channel index
+    pub channel_idx: u8,
+    /// Flood path length, or 0xFF for a direct packet
+    pub path_len: u8,
+    /// Application identifier (`docs/number_allocations.md` in the firmware repo)
+    pub data_type: u16,
+    /// The datagram
+    pub data: Vec<u8>,
+    /// SNR (divided by 4)
+    pub snr: f32,
 }
 
 /// Message sent acknowledgement

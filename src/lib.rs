@@ -95,8 +95,8 @@ pub const AUTO_ADD_SENSOR: u8 = 1 << 4;
 
 pub use error::Error;
 pub use events::{
-    ChannelMessage, ContactMessage, EventDispatcher, EventPayload, EventType, MeshCoreEvent,
-    MsgSentInfo, Subscription,
+    ChannelData, ChannelMessage, ContactMessage, EventDispatcher, EventPayload, EventType,
+    MeshCoreEvent, MsgSentInfo, Subscription,
 };
 pub use meshcore::MeshCore;
 pub use packets::{AnonReqType, BinaryReqType, ControlType, PacketType, PayloadType, RouteType};
