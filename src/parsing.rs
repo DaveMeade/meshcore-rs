@@ -1515,7 +1515,9 @@ pub fn parse_path_discovery_response(payload: &[u8]) -> Result<PathDiscoveryResp
         .checked_mul(out_path_hash_len as usize)
         .ok_or_else(|| Error::protocol("PathDiscoveryResponse outbound path overflow"))?;
 
-    let out_path_start = PATH_DISC_OUT_PATH_OFFSET + 1; // jonesy:allow(overflow)
+    let out_path_start = PATH_DISC_OUT_PATH_OFFSET
+        .checked_add(1)
+        .ok_or_else(|| Error::protocol("PathDiscoveryResponse outbound path start overflow"))?;
     let out_path_end = out_path_start
         .checked_add(out_path_bytes)
         .ok_or_else(|| Error::protocol("PathDiscoveryResponse outbound path overflow"))?;
