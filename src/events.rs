@@ -139,6 +139,10 @@ pub enum EventPayload {
     Mma(Vec<MmaEntry>),
     /// ACL response
     Acl(Vec<AclEntry>),
+    /// Login accepted by a room server or repeater
+    LoginSuccess(LoginSuccess),
+    /// Login refused by a room server or repeater
+    LoginFailed { pubkey_prefix: [u8; 6] },
     /// Neighbours response
     Neighbours(NeighboursData),
     /// Binary response
@@ -319,7 +323,7 @@ pub struct ContactMessage {
     pub sender_prefix: [u8; 6],
     /// Path length
     pub path_len: u8,
-    /// Text type (0 = plain, 2 = signed)
+    /// Text type (0 = plain, 1 = CLI data, 2 = signed plain)
     pub txt_type: u8,
     /// Sender timestamp
     pub sender_timestamp: u32,
@@ -327,7 +331,7 @@ pub struct ContactMessage {
     pub text: String,
     /// SNR (only in v3, divided by 4)
     pub snr: Option<f32>,
-    /// Signature (if txt_type == 2)
+    /// The author's 4-byte public key prefix on a room server post (txt_type == 2)
     pub signature: Option<[u8; 4]>,
 }
 
@@ -511,6 +515,28 @@ pub struct AclEntry {
     pub prefix: [u8; 6],
     /// Permissions
     pub permissions: u8,
+}
+
+/// A room server or repeater accepted our login (`PUSH_CODE_LOGIN_SUCCESS`)
+#[derive(Debug, Clone)]
+pub struct LoginSuccess {
+    /// The firmware's role flag: bit 0 set for an admin, 2 for a guest
+    pub permissions: u8,
+    /// Public key prefix of the server that answered (6 bytes)
+    pub pubkey_prefix: [u8; 6],
+    /// The server's clock when it answered (newer firmware only)
+    pub server_timestamp: Option<u32>,
+    /// The server's ACL permissions for us (newer firmware only)
+    pub acl_permissions: Option<u8>,
+    /// The server's firmware version level (newer firmware only)
+    pub fw_ver_level: Option<u8>,
+}
+
+impl LoginSuccess {
+    /// Whether the server granted admin rights
+    pub fn is_admin(&self) -> bool {
+        self.permissions & 1 == 1
+    }
 }
 
 /// Neighbours response data

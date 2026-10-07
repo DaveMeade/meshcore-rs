@@ -493,12 +493,21 @@ impl MessageReader {
             }
 
             PacketType::LoginSuccess => {
-                let event = MeshCoreEvent::new(EventType::LoginSuccess, EventPayload::None);
+                let login = parse_login_success(payload)?;
+                let prefix_hex = hex_encode(&login.pubkey_prefix);
+                let event =
+                    MeshCoreEvent::new(EventType::LoginSuccess, EventPayload::LoginSuccess(login))
+                        .with_attribute("pubkey_prefix", prefix_hex);
                 self.dispatcher.emit(event).await;
             }
 
             PacketType::LoginFailed => {
-                let event = MeshCoreEvent::new(EventType::LoginFailed, EventPayload::None);
+                let pubkey_prefix = parse_login_failed(payload)?;
+                let event = MeshCoreEvent::new(
+                    EventType::LoginFailed,
+                    EventPayload::LoginFailed { pubkey_prefix },
+                )
+                .with_attribute("pubkey_prefix", hex_encode(&pubkey_prefix));
                 self.dispatcher.emit(event).await;
             }
 
@@ -1059,10 +1068,19 @@ mod tests {
         let (reader, dispatcher) = create_reader();
         let mut receiver = dispatcher.receiver();
 
-        reader
-            .handle_rx(vec![PacketType::LoginSuccess as u8])
-            .await
-            .unwrap();
+        let mut frame = vec![
+            PacketType::LoginSuccess as u8,
+            1,
+            0x11,
+            0x22,
+            0x33,
+            0x44,
+            0x55,
+            0x66,
+        ];
+        frame.extend_from_slice(&1_700_000_000u32.to_le_bytes());
+        frame.extend_from_slice(&[3, 1]);
+        reader.handle_rx(frame).await.unwrap();
 
         let event = tokio::time::timeout(Duration::from_millis(100), receiver.recv())
             .await
@@ -1070,6 +1088,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(event.event_type, EventType::LoginSuccess);
+        assert_eq!(
+            event.attributes.get("pubkey_prefix").map(String::as_str),
+            Some("112233445566")
+        );
+        match event.payload {
+            EventPayload::LoginSuccess(login) => {
+                assert!(login.is_admin());
+                assert_eq!(login.acl_permissions, Some(3));
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1078,7 +1107,16 @@ mod tests {
         let mut receiver = dispatcher.receiver();
 
         reader
-            .handle_rx(vec![PacketType::LoginFailed as u8])
+            .handle_rx(vec![
+                PacketType::LoginFailed as u8,
+                0,
+                0x11,
+                0x22,
+                0x33,
+                0x44,
+                0x55,
+                0x66,
+            ])
             .await
             .unwrap();
 
@@ -1088,6 +1126,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(event.event_type, EventType::LoginFailed);
+        assert_eq!(
+            event.attributes.get("pubkey_prefix").map(String::as_str),
+            Some("112233445566")
+        );
+        match event.payload {
+            EventPayload::LoginFailed { pubkey_prefix } => {
+                assert_eq!(pubkey_prefix, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
     }
 
     #[tokio::test]

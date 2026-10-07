@@ -80,6 +80,8 @@ pub struct OtherParams {
 pub const TXT_TYPE_PLAIN: u8 = 0;
 /// A command for a repeater or room server rather than a message for a person.
 pub const TXT_TYPE_CLI_DATA: u8 = 1;
+/// A room server's post: the author's 4-byte key prefix, then the text.
+pub const TXT_TYPE_SIGNED_PLAIN: u8 = 2;
 const CMD_SEND_CONTROL_DATA: u8 = 55;
 const CMD_GET_STATS: u8 = 56;
 const CMD_SET_AUTOADD_CONFIG: u8 = 58;
