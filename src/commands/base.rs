@@ -9,7 +9,9 @@ use crate::events::*;
 use crate::packets::BinaryReqType;
 use crate::parsing::{hex_decode, hex_encode, to_microdegrees};
 use crate::reader::MessageReader;
-use crate::{Error, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
+use crate::{
+    Error, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, MAX_CHANNEL_DATA_LEN, PUBLIC_KEY_LEN,
+};
 
 /// Default command timeout
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -67,6 +69,10 @@ const CMD_GET_STATS: u8 = 56;
 const CMD_SET_AUTOADD_CONFIG: u8 = 58;
 const CMD_GET_AUTOADD_CONFIG: u8 = 59;
 const CMD_SET_PATH_HASH_MODE: u8 = 61;
+const CMD_SEND_CHANNEL_DATA: u8 = 62;
+
+/// `path_len` value asking the firmware to flood rather than follow a path (`OUT_PATH_UNKNOWN`).
+const PATH_LEN_FLOOD: u8 = 0xFF;
 
 /// Destination type for commands
 #[derive(Debug, Clone)]
@@ -1065,6 +1071,32 @@ impl CommandHandler {
 
         self.send_checked(&data).await?;
 
+        Ok(())
+    }
+
+    /// Send a binary datagram on a channel, flood routed
+    ///
+    /// Format: [CMD_SEND_CHANNEL_DATA=0x3E][channel_idx][path_len=0xFF][data_type: u16 LE][data]
+    ///
+    /// `data_type` identifies the application (`docs/number_allocations.md` in the
+    /// firmware repo); 0 is reserved. Needs companion firmware v1.15.0 or later.
+    pub async fn send_channel_data(&self, channel: u8, data_type: u16, data: &[u8]) -> Result<()> {
+        if data_type == 0 {
+            return Err(Error::invalid_param("data_type 0 is reserved"));
+        }
+        if data.len() > MAX_CHANNEL_DATA_LEN {
+            return Err(Error::invalid_param(format!(
+                "Channel data too large: {} > {}",
+                data.len(),
+                MAX_CHANNEL_DATA_LEN
+            )));
+        }
+
+        let mut frame = vec![CMD_SEND_CHANNEL_DATA, channel, PATH_LEN_FLOOD];
+        frame.extend_from_slice(&data_type.to_le_bytes());
+        frame.extend_from_slice(data);
+
+        self.send_checked(&frame).await?;
         Ok(())
     }
 
@@ -2105,6 +2137,7 @@ mod tests {
             .set_channel(1, "c", &[0; CHANNEL_SECRET_LEN])
             .await));
         assert!(bad(handler.import_private_key(&[0; 64]).await));
+        assert!(bad(handler.send_channel_data(1, 1, &[0xDE]).await));
     }
 
     #[tokio::test]
@@ -2501,6 +2534,38 @@ mod tests {
         let result = handler.get_channel(0).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().name, "General");
+    }
+
+    #[tokio::test]
+    async fn test_send_channel_data_wire_format() {
+        let (handler, mut rx, dispatcher) = create_test_handler();
+        // A payload at the cap exactly
+        let data: Vec<u8> = (0..MAX_CHANNEL_DATA_LEN).map(|i| i as u8).collect();
+        let expected = data.clone();
+
+        let dispatcher_clone = dispatcher.clone();
+        tokio::spawn(async move {
+            let sent = rx.recv().await.unwrap();
+            assert_eq!(sent[0], CMD_SEND_CHANNEL_DATA);
+            assert_eq!(sent[1], 3); // channel_idx
+            assert_eq!(sent[2], PATH_LEN_FLOOD);
+            assert_eq!(&sent[3..5], &0xFF42u16.to_le_bytes());
+            assert_eq!(&sent[5..], &expected[..]);
+
+            dispatcher_clone
+                .emit(MeshCoreEvent::new(EventType::Ok, EventPayload::None))
+                .await;
+        });
+
+        handler.send_channel_data(3, 0xFF42, &data).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_send_channel_data_rejects_oversize_and_reserved_type() {
+        let (handler, _rx, _dispatcher) = create_test_handler();
+        let data = vec![0u8; MAX_CHANNEL_DATA_LEN + 1];
+        assert!(handler.send_channel_data(0, 1, &data).await.is_err());
+        assert!(handler.send_channel_data(0, 0, &[0xDE]).await.is_err());
     }
 
     #[tokio::test]
