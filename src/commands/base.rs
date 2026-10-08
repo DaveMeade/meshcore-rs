@@ -2137,6 +2137,7 @@ mod tests {
             .set_channel(1, "c", &[0; CHANNEL_SECRET_LEN])
             .await));
         assert!(bad(handler.import_private_key(&[0; 64]).await));
+        assert!(bad(handler.send_channel_data(1, 1, &[0xDE]).await));
     }
 
     #[tokio::test]
