@@ -231,7 +231,6 @@ assumed).
 | 28 (0x1C) | `HAS_CONNECTION` | Whether the node has an active BLE/serial companion connection | companion-v1.0.0a | ✅ `has_connection()` |
 | 36 (0x24) | `SEND_TRACE_PATH` | Trace/test the route to a node | companion-v1.4.0 | ✅ `send_trace()` |
 | 37 (0x25) | `SET_DEVICE_PIN` | Set a device PIN (BLE pairing) | companion-v1.4.0 | ✅ `set_devicepin()` |
-| 38 (0x26) | `SET_OTHER_PARAMS` | Legacy `manual_add_contacts` flag, telemetry mode, advert location policy, multi-acks | companion-v1.5.0 | ✅ `set_other_params()` |
 | 39 (0x27) | `SEND_TELEMETRY_REQ` | Request telemetry from a contact — **deprecated in firmware** in favor of `SEND_BINARY_REQ` (already supported here, see `req_telemetry()`) | companion-v1.6.0 | ✅ `send_telemetry_req()` |
 | 42 (0x2A) | `GET_ADVERT_PATH` | Last known route recorded for a contact's public key | companion-v1.7.1 | ✅ `get_advert_path()` |
 | 43 (0x2B) | `GET_TUNING_PARAMS` | Read radio tuning params (rx delay base, airtime factor) — note `SET_TUNING_PARAMS` (21, above) isn't actually wired up here either, despite its `CMD_*` constant existing | companion-v1.7.3 | ✅ `get_tuning()` |

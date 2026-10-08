@@ -74,6 +74,8 @@ const CMD_SEND_CHANNEL_DATA: u8 = 62;
 
 /// `path_len` value asking the firmware to flood rather than follow a path (`OUT_PATH_UNKNOWN`).
 const PATH_LEN_FLOOD: u8 = 0xFF;
+/// A telemetry mode is a two-bit field of the byte `set_other_params` packs
+const TELEMETRY_MODE_MAX: u8 = 0b11;
 
 /// Destination type for commands
 #[derive(Debug, Clone)]
@@ -452,9 +454,17 @@ impl CommandHandler {
     ///
     /// Format: [CMD_SET_OTHER_PARAMS=0x26][manual_add_contacts][telemetry: base | loc << 2 | env << 4][advert_loc_policy][multi_acks]
     pub async fn set_other_params(&self, params: OtherParams) -> Result<MeshCoreEvent> {
-        let telemetry = (params.telemetry_mode_base & 0x03)
-            | ((params.telemetry_mode_loc & 0x03) << 2)
-            | ((params.telemetry_mode_env & 0x03) << 4);
+        let modes = [
+            params.telemetry_mode_base,
+            params.telemetry_mode_loc,
+            params.telemetry_mode_env,
+        ];
+        if modes.iter().any(|mode| *mode > TELEMETRY_MODE_MAX) {
+            return Err(Error::invalid_param("telemetry modes are two bits"));
+        }
+        let telemetry = params.telemetry_mode_base
+            | (params.telemetry_mode_loc << 2)
+            | (params.telemetry_mode_env << 4);
         let data = [
             CMD_SET_OTHER_PARAMS,
             u8::from(params.manual_add_contacts),
@@ -2210,6 +2220,20 @@ mod tests {
 
         let result = handler.send_advert(false).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_set_other_params_rejects_a_mode_over_two_bits() {
+        let (handler, _rx, _dispatcher) = create_test_handler();
+        let params = OtherParams {
+            manual_add_contacts: false,
+            telemetry_mode_base: 4,
+            telemetry_mode_loc: 0,
+            telemetry_mode_env: 0,
+            advert_loc_policy: 0,
+            multi_acks: 0,
+        };
+        assert!(handler.set_other_params(params).await.is_err());
     }
 
     #[tokio::test]
