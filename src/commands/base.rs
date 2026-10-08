@@ -176,7 +176,7 @@ impl From<&Contact> for Destination {
 }
 
 /// The node parameters [`CommandHandler::set_other_params`] writes together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct OtherParams {
     pub manual_add_contacts: bool,
     pub telemetry_mode_base: u8,
@@ -2177,15 +2177,10 @@ mod tests {
             .await));
         assert!(bad(handler.import_private_key(&[0; 64]).await));
         assert!(bad(handler.send_channel_data(1, 1, &[0xDE]).await));
-        let params = OtherParams {
-            manual_add_contacts: false,
-            telemetry_mode_base: 0,
-            telemetry_mode_loc: 0,
-            telemetry_mode_env: 0,
-            advert_loc_policy: 0,
-            multi_acks: 0,
-        };
-        assert!(bad(handler.set_other_params(params).await.map(drop)));
+        assert!(bad(handler
+            .set_other_params(OtherParams::default())
+            .await
+            .map(drop)));
     }
 
     #[tokio::test]
@@ -2226,12 +2221,8 @@ mod tests {
     async fn test_set_other_params_rejects_a_mode_over_two_bits() {
         let (handler, _rx, _dispatcher) = create_test_handler();
         let params = OtherParams {
-            manual_add_contacts: false,
             telemetry_mode_base: 4,
-            telemetry_mode_loc: 0,
-            telemetry_mode_env: 0,
-            advert_loc_policy: 0,
-            multi_acks: 0,
+            ..OtherParams::default()
         };
         assert!(handler.set_other_params(params).await.is_err());
     }
