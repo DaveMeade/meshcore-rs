@@ -1185,48 +1185,18 @@ pub fn parse_packet_stats(data: &[u8]) -> Result<PacketStatsData> {
     })
 }
 
-// --- Advertisement payload layout ---
-
-/// Length of the advertiser's 6-byte public key prefix.
-const ADVERT_PREFIX_LEN: usize = 6;
-/// Fixed width of the advertisement name field.
-const ADVERT_NAME_LEN: usize = 32;
-/// Minimum payload length (prefix + name header).
-const ADVERT_MIN_LEN: usize = ADVERT_PREFIX_LEN + 8; // prefix(6) + at least some name bytes
-const ADVERT_NAME_OFFSET: usize = ADVERT_PREFIX_LEN;
-/// Offset of the optional latitude field.
-const ADVERT_LAT_OFFSET: usize = ADVERT_NAME_OFFSET + ADVERT_NAME_LEN;
-/// Offset of the optional longitude field.
-const ADVERT_LON_OFFSET: usize = ADVERT_LAT_OFFSET + 4;
-
 /// Parse an [`AdvertisementData`] from a `PacketType::Advertisement` payload.
 ///
-/// Returns an error if the payload is too short to contain the prefix and
-/// at least part of the name.
+/// Returns an error if the payload is not exactly [`PUBLIC_KEY_LEN`] bytes.
 pub fn parse_advertisement(payload: &[u8]) -> Result<AdvertisementData> {
-    if payload.len() < ADVERT_MIN_LEN {
-        return Err(Error::protocol("Advertisement payload too short"));
+    if payload.len() != PUBLIC_KEY_LEN {
+        return Err(Error::protocol(format!(
+            "Advertisement payload must be {} bytes, got {}",
+            PUBLIC_KEY_LEN,
+            payload.len()
+        )));
     }
-
-    let prefix: [u8; 6] = read_bytes(payload, 0)?;
-    let name = read_string(payload, ADVERT_NAME_OFFSET, ADVERT_NAME_LEN);
-    let lat = if payload.len() >= ADVERT_LAT_OFFSET + 4 {
-        read_i32_le(payload, ADVERT_LAT_OFFSET).unwrap_or(0)
-    } else {
-        0
-    };
-    let lon = if payload.len() >= ADVERT_LON_OFFSET + 4 {
-        read_i32_le(payload, ADVERT_LON_OFFSET).unwrap_or(0)
-    } else {
-        0
-    };
-
-    Ok(AdvertisementData {
-        prefix,
-        name,
-        lat,
-        lon,
-    })
+    read_bytes(payload, 0).map(AdvertisementData::from)
 }
 
 /// Parse a [`PathUpdateData`] from a `PacketType::PathUpdate` payload.
@@ -2785,35 +2755,19 @@ mod tests {
     #[test]
     fn test_parse_advertisement_too_short() {
         assert!(parse_advertisement(&[]).is_err());
-        assert!(parse_advertisement(&[0; 13]).is_err());
+        assert!(parse_advertisement(&[0; PUBLIC_KEY_LEN - 1]).is_err());
     }
 
     #[test]
-    fn test_parse_advertisement_minimal() {
-        let mut data = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06]; // prefix
-        let mut name = [0u8; 32];
-        name[..4].copy_from_slice(b"Node");
-        data.extend_from_slice(&name);
-        // No lat/lon
-        let advert = parse_advertisement(&data).unwrap();
-        assert_eq!(advert.prefix, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
-        assert_eq!(advert.name, "Node");
-        assert_eq!(advert.lat, 0);
-        assert_eq!(advert.lon, 0);
+    fn test_parse_advertisement() {
+        let key: [u8; PUBLIC_KEY_LEN] = std::array::from_fn(|i| i as u8);
+        let advert = parse_advertisement(&key).unwrap();
+        assert_eq!(advert.public_key, key);
     }
 
     #[test]
-    fn test_parse_advertisement_with_latlon() {
-        let mut data = vec![0xAA; 6]; // prefix
-        let mut name = [0u8; 32];
-        name[..5].copy_from_slice(b"Hello");
-        data.extend_from_slice(&name);
-        data.extend_from_slice(&37774900i32.to_le_bytes()); // lat
-        data.extend_from_slice(&(-122419400i32).to_le_bytes()); // lon
-        let advert = parse_advertisement(&data).unwrap();
-        assert_eq!(advert.name, "Hello");
-        assert_eq!(advert.lat, 37774900);
-        assert_eq!(advert.lon, -122419400);
+    fn test_parse_advertisement_too_long() {
+        assert!(parse_advertisement(&[0; PUBLIC_KEY_LEN + 1]).is_err());
     }
 
     // ========== parse_path_update tests ==========

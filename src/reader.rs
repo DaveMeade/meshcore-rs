@@ -1581,15 +1581,7 @@ mod tests {
         let mut receiver = dispatcher.receiver();
 
         let mut data = vec![PacketType::Advertisement as u8];
-        data.extend_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]); // prefix
-                                                                       // name (32 bytes padded)
-        let mut name_bytes = [0u8; 32];
-        name_bytes[..5].copy_from_slice(b"Node1");
-        data.extend_from_slice(&name_bytes);
-        // lat at offset 38
-        data.extend_from_slice(&37774900i32.to_le_bytes());
-        // lon at offset 42
-        data.extend_from_slice(&(-122419400i32).to_le_bytes());
+        data.extend_from_slice(&[0x5A; PUBLIC_KEY_LEN]);
 
         reader.handle_rx(data).await.unwrap();
 
@@ -1601,37 +1593,7 @@ mod tests {
         assert_eq!(event.event_type, EventType::Advertisement);
         match event.payload {
             EventPayload::Advertisement(adv) => {
-                assert_eq!(adv.prefix, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
-                assert_eq!(adv.name, "Node1");
-                assert_eq!(adv.lat, 37774900);
-                assert_eq!(adv.lon, -122419400);
-            }
-            _ => panic!("Expected Advertisement payload"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_handle_rx_advertisement_minimal() {
-        let (reader, dispatcher) = create_reader();
-        let mut receiver = dispatcher.receiver();
-
-        let mut data = vec![PacketType::Advertisement as u8];
-        data.extend_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]); // prefix
-                                                                       // Just 8 bytes for name (minimal)
-        data.extend_from_slice(b"ShortNam");
-
-        reader.handle_rx(data).await.unwrap();
-
-        let event = tokio::time::timeout(Duration::from_millis(100), receiver.recv())
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(event.event_type, EventType::Advertisement);
-        match event.payload {
-            EventPayload::Advertisement(adv) => {
-                assert_eq!(adv.lat, 0); // default when not present
-                assert_eq!(adv.lon, 0);
+                assert_eq!(adv.public_key, [0x5A; PUBLIC_KEY_LEN]);
             }
             _ => panic!("Expected Advertisement payload"),
         }

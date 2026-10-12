@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
 use crate::packets::{PayloadType, RouteType};
-use crate::{Error, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
+use crate::{Error, PublicKey, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
 
 /// Event types emitted by MeshCore
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -464,28 +464,30 @@ pub struct ChannelInfoData {
     pub secret: [u8; CHANNEL_SECRET_LEN],
 }
 
-/// Advertisement data
-#[derive(Debug, Clone)]
+/// A known contact advertised again; the companion message carries only its public key
+///
+/// A newly discovered contact is reported as a full [`Contact`] instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvertisementData {
-    /// Advertiser public key prefix
-    pub prefix: [u8; 6],
-    /// Advertisement name
-    pub name: String,
-    /// Latitude in microdegrees
-    pub lat: i32,
-    /// Longitude in microdegrees
-    pub lon: i32,
+    /// Advertiser public key
+    pub public_key: PublicKey,
+}
+
+impl From<PublicKey> for AdvertisementData {
+    fn from(public_key: PublicKey) -> Self {
+        Self { public_key }
+    }
 }
 
 /// Path update data
 #[derive(Debug, Clone)]
 pub struct PathUpdateData {
     /// Node public key
-    pub public_key: [u8; PUBLIC_KEY_LEN],
+    pub public_key: PublicKey,
 }
 
-impl From<[u8; PUBLIC_KEY_LEN]> for PathUpdateData {
-    fn from(public_key: [u8; PUBLIC_KEY_LEN]) -> Self {
+impl From<PublicKey> for PathUpdateData {
+    fn from(public_key: PublicKey) -> Self {
         Self { public_key }
     }
 }
@@ -774,9 +776,9 @@ pub struct MeshPacketHeader {
 
 /// Node identity broadcast in a raw ADVERT payload overheard on the mesh.
 ///
-/// Unlike [`AdvertisementData`] (the companion's own summarized push, keyed
-/// by a 6-byte prefix), this carries the full advertisement as it appears
-/// on air, including the advertiser's full public key and signature.
+/// Unlike [`AdvertisementData`] (the companion's own push, which carries only
+/// the advertiser's public key), this carries the full advertisement as it
+/// appears on air, including the advertiser's full public key and signature.
 #[derive(Debug, Clone)]
 pub struct RawAdvertisement {
     /// Advertiser's full 32-byte public key
@@ -1656,14 +1658,16 @@ mod tests {
 
     #[test]
     fn test_advertisement_data_debug() {
-        let advert = AdvertisementData {
-            prefix: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06],
-            name: "Node1".to_string(),
-            lat: 37774900,
-            lon: -122419400,
-        };
+        let advert = AdvertisementData::from([0x42; PUBLIC_KEY_LEN]);
         let debug_str = format!("{:?}", advert);
-        assert!(debug_str.contains("Node1"));
+        assert!(debug_str.contains("public_key"));
+    }
+
+    #[test]
+    fn test_advertisement_data_equality() {
+        let advert = AdvertisementData::from([0x42; PUBLIC_KEY_LEN]);
+        assert_eq!(advert, advert.clone());
+        assert_ne!(advert, AdvertisementData::from([0x43; PUBLIC_KEY_LEN]));
     }
 
     #[test]
