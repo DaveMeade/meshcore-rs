@@ -1473,7 +1473,8 @@ mod tests {
     use tokio::time::timeout;
 
     use crate::{
-        AUTO_ADD_CHAT, AUTO_ADD_OVERWRITE_OLDEST, AUTO_ADD_REPEATER, AUTO_ADD_ROOM_SERVER,
+        PacketType, AUTO_ADD_CHAT, AUTO_ADD_OVERWRITE_OLDEST, AUTO_ADD_REPEATER,
+        AUTO_ADD_ROOM_SERVER,
     };
 
     const KEY: PublicKey = [7; PUBLIC_KEY_LEN];
@@ -2171,6 +2172,36 @@ mod tests {
         assert!(bad(handler.send_control_data(&[1]).await));
         assert!(bad(handler.send_channel_msg(1, "m", None).await));
         assert!(bad(handler.sign_data(&[1]).await));
+    }
+
+    // The firmware's error frame carries a numeric code, which must reach the
+    // caller as a number rather than as a raw control byte.
+    #[tokio::test]
+    async fn add_contact_reports_device_error_code() {
+        let (handler, mut rx, dispatcher) = create_test_handler();
+        let reader = MessageReader::new(dispatcher);
+        tokio::spawn(async move {
+            rx.recv().await.unwrap();
+            // ERR_CODE_TABLE_FULL: the device's contact table is full
+            reader
+                .handle_rx(vec![PacketType::Error as u8, 3])
+                .await
+                .unwrap();
+        });
+
+        let result = timeout(Duration::from_secs(2), handler.add_contact(&contact()))
+            .await
+            .expect("add_contact should not wait for the default timeout");
+        match result {
+            Err(Error::Device(msg)) => {
+                assert!(
+                    !msg.chars().any(char::is_control),
+                    "control character in {msg:?}"
+                );
+                assert_eq!(msg, "code 3");
+            }
+            other => panic!("expected Err(Error::Device(\"code 3\")), got {other:?}"),
+        }
     }
 
     #[tokio::test]
