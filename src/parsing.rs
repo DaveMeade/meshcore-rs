@@ -12,7 +12,7 @@ use crate::events::{
     StatsCategory, StatsData, StatusData, TraceHop, TraceInfo,
 };
 use crate::packets::{PayloadType, RouteType};
-use crate::{Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
+use crate::{PublicKey, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
 
 /// Read a little-endian u16 from a byte slice
 pub fn read_u16_le(data: &[u8], offset: usize) -> Result<u16> {
@@ -131,7 +131,7 @@ pub fn parse_contact(data: &[u8]) -> Result<Contact> {
         )));
     }
 
-    let public_key: [u8; PUBLIC_KEY_LEN] = read_bytes(data, 0)?;
+    let public_key: PublicKey = read_bytes(data, 0)?;
     let contact_type = data[32];
     let flags = data[33];
     let path_len = data[34] as i8;
@@ -186,7 +186,7 @@ pub fn parse_self_info(data: &[u8]) -> Result<SelfInfo> {
     let tx_power = data[1];
     let max_tx_power = data[2]; // jonesy:allow(bounds)
 
-    let public_key: [u8; PUBLIC_KEY_LEN] = read_bytes(data, 3)?;
+    let public_key: PublicKey = read_bytes(data, 3)?;
 
     let adv_lat = read_i32_le(data, 35)?;
     let adv_lon = read_i32_le(data, 39)?;
@@ -782,7 +782,7 @@ pub fn parse_raw_advertisement(data: &[u8]) -> Result<RawAdvertisement> {
         return Err(Error::protocol("RawAdvertisement payload too short"));
     }
 
-    let public_key: [u8; PUBLIC_KEY_LEN] = read_bytes(data, 0)?;
+    let public_key: PublicKey = read_bytes(data, 0)?;
     let timestamp = read_u32_le(data, TIMESTAMP_OFFSET)?;
     let signature: [u8; 64] = read_bytes(data, SIGNATURE_OFFSET)?;
     let flags = *data
@@ -922,7 +922,7 @@ pub fn parse_advert_response(payload: &[u8]) -> Result<AdvertResponseData> {
     }
 
     let tag: [u8; 4] = read_bytes(payload, ADVERT_RESP_TAG_OFFSET)?;
-    let pubkey: [u8; PUBLIC_KEY_LEN] = read_bytes(payload, ADVERT_RESP_PUBKEY_OFFSET)?;
+    let pubkey: PublicKey = read_bytes(payload, ADVERT_RESP_PUBKEY_OFFSET)?;
     let adv_type = payload[ADVERT_RESP_ADV_TYPE_OFFSET]; // jonesy:allow(bounds) -- checked >= ADVERT_RESP_MIN_LEN above
     let node_name = read_string(
         payload,
@@ -2760,7 +2760,7 @@ mod tests {
 
     #[test]
     fn test_parse_advertisement() {
-        let key: [u8; PUBLIC_KEY_LEN] = std::array::from_fn(|i| i as u8);
+        let key: PublicKey = std::array::from_fn(|i| i as u8);
         let advert = parse_advertisement(&key).unwrap();
         assert_eq!(advert.public_key, key);
     }
@@ -2780,7 +2780,7 @@ mod tests {
 
     #[test]
     fn test_parse_path_update() {
-        let key: [u8; PUBLIC_KEY_LEN] = std::array::from_fn(|i| i as u8);
+        let key: PublicKey = std::array::from_fn(|i| i as u8);
         let update = parse_path_update(&key).unwrap();
         assert_eq!(update.public_key, key);
     }

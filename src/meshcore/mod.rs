@@ -453,7 +453,7 @@ pub async fn read_task<R>(
 mod tests {
     use super::*;
     use crate::events::Contact;
-    use crate::PUBLIC_KEY_LEN;
+    use crate::{PublicKey, PUBLIC_KEY_LEN};
     use futures::StreamExt;
     use std::io::Cursor;
     use std::pin::Pin;
@@ -466,7 +466,7 @@ mod tests {
         MeshCore::new_with_sender(sender)
     }
 
-    fn make_contact(name: &str, public_key: [u8; PUBLIC_KEY_LEN]) -> Contact {
+    fn make_contact(name: &str, public_key: PublicKey) -> Contact {
         Contact {
             public_key,
             contact_type: 1,

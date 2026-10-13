@@ -10,7 +10,8 @@ use crate::packets::BinaryReqType;
 use crate::parsing::{hex_decode, hex_encode, to_microdegrees};
 use crate::reader::MessageReader;
 use crate::{
-    Error, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, MAX_CHANNEL_DATA_LEN, PUBLIC_KEY_LEN,
+    Error, PublicKey, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, MAX_CHANNEL_DATA_LEN,
+    PUBLIC_KEY_LEN,
 };
 
 /// Default command timeout
@@ -116,17 +117,17 @@ impl Destination {
     }
 
     /// Get the full public key if available (32 bytes)
-    pub fn public_key(&self) -> Option<[u8; PUBLIC_KEY_LEN]> {
+    pub fn public_key(&self) -> Option<PublicKey> {
         match self {
             Destination::Bytes(b) if b.len() >= PUBLIC_KEY_LEN => {
-                let mut key = [0u8; PUBLIC_KEY_LEN];
+                let mut key: PublicKey = [0; PUBLIC_KEY_LEN];
                 key.copy_from_slice(&b[..PUBLIC_KEY_LEN]);
                 Some(key)
             }
             Destination::Hex(s) => {
                 let bytes = hex_decode(s).ok()?;
                 if bytes.len() >= PUBLIC_KEY_LEN {
-                    let mut key = [0u8; PUBLIC_KEY_LEN];
+                    let mut key: PublicKey = [0; PUBLIC_KEY_LEN];
                     key.copy_from_slice(&bytes[..PUBLIC_KEY_LEN]);
                     Some(key)
                 } else {
@@ -900,7 +901,7 @@ impl CommandHandler {
     /// Get one contact by public key
     ///
     /// Format: [CMD_GET_CONTACT_BY_KEY=0x1E][pubkey: 32]
-    pub async fn get_contact_by_key(&self, public_key: &[u8; PUBLIC_KEY_LEN]) -> Result<Contact> {
+    pub async fn get_contact_by_key(&self, public_key: &PublicKey) -> Result<Contact> {
         let mut data = vec![CMD_GET_CONTACT_BY_KEY];
         data.extend_from_slice(public_key);
         let event = self
@@ -1475,7 +1476,7 @@ mod tests {
         AUTO_ADD_CHAT, AUTO_ADD_OVERWRITE_OLDEST, AUTO_ADD_REPEATER, AUTO_ADD_ROOM_SERVER,
     };
 
-    const KEY: [u8; PUBLIC_KEY_LEN] = [7; PUBLIC_KEY_LEN];
+    const KEY: PublicKey = [7; PUBLIC_KEY_LEN];
 
     // ========== Destination Tests ==========
 

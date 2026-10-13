@@ -163,7 +163,7 @@ pub enum EventPayload {
 #[derive(Debug, Clone)]
 pub struct Contact {
     /// 32-byte public key
-    pub public_key: [u8; PUBLIC_KEY_LEN],
+    pub public_key: PublicKey,
     /// Contact type
     pub contact_type: u8,
     /// Contact flags
@@ -240,7 +240,7 @@ pub struct SelfInfo {
     /// Maximum TX power
     pub max_tx_power: u8,
     /// 32-byte public key
-    pub public_key: [u8; PUBLIC_KEY_LEN],
+    pub public_key: PublicKey,
     /// Latitude in microdegrees
     pub adv_lat: i32,
     /// Longitude in microdegrees
@@ -586,7 +586,7 @@ pub struct AdvertResponseData {
     /// Tag
     pub tag: [u8; 4],
     /// Public key
-    pub pubkey: [u8; PUBLIC_KEY_LEN],
+    pub pubkey: PublicKey,
     /// Advertisement type
     pub adv_type: u8,
     /// Node name
@@ -782,7 +782,7 @@ pub struct MeshPacketHeader {
 #[derive(Debug, Clone)]
 pub struct RawAdvertisement {
     /// Advertiser's full 32-byte public key
-    pub public_key: [u8; PUBLIC_KEY_LEN],
+    pub public_key: PublicKey,
     /// Advertisement timestamp (seconds)
     pub timestamp: u32,
     /// Signature over the advertisement (64 bytes)
