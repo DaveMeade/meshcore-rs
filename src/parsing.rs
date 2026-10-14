@@ -1455,13 +1455,13 @@ pub fn parse_telemetry_response(payload: &[u8]) -> Result<TelemetryResponseFrame
 
 /// Parse custom variables from a `PacketType::CustomVars` payload.
 ///
-/// The payload is UTF-8 text with `key=value` pairs separated by
-/// newlines.
+/// The payload is UTF-8 text with `name:value` pairs separated by
+/// commas.
 pub fn parse_custom_vars(payload: &[u8]) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     let text = String::from_utf8_lossy(payload);
-    for line in text.lines() {
-        if let Some((key, value)) = line.split_once('=') {
+    for pair in text.split(',') {
+        if let Some((key, value)) = pair.split_once(':') {
             vars.insert(key.to_string(), value.to_string());
         }
     }
@@ -3054,13 +3054,13 @@ mod tests {
 
     #[test]
     fn test_parse_custom_vars_single() {
-        let vars = parse_custom_vars(b"key=value");
-        assert_eq!(vars.get("key").unwrap(), "value");
+        let vars = parse_custom_vars(b"gps:1");
+        assert_eq!(vars.get("gps").unwrap(), "1");
     }
 
     #[test]
     fn test_parse_custom_vars_multiple() {
-        let vars = parse_custom_vars(b"a=1\nb=2\nc=3");
+        let vars = parse_custom_vars(b"a:1,b:2,c:3");
         assert_eq!(vars.len(), 3);
         assert_eq!(vars.get("a").unwrap(), "1");
         assert_eq!(vars.get("b").unwrap(), "2");
@@ -3068,8 +3068,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_custom_vars_no_equals_skipped() {
-        let vars = parse_custom_vars(b"good=yes\nbadline\nalso=ok");
+    fn test_parse_custom_vars_no_colon_skipped() {
+        let vars = parse_custom_vars(b"good:yes,badpair,also:ok");
         assert_eq!(vars.len(), 2);
         assert_eq!(vars.get("good").unwrap(), "yes");
         assert_eq!(vars.get("also").unwrap(), "ok");
