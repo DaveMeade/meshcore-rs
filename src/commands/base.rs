@@ -9,7 +9,7 @@ use crate::events::*;
 use crate::packets::BinaryReqType;
 use crate::parsing::{hex_decode, hex_encode, to_microdegrees};
 use crate::reader::MessageReader;
-use crate::{Error, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
+use crate::{Error, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, MAX_PATH_LEN, PUBLIC_KEY_LEN};
 
 /// Default command timeout
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -908,9 +908,9 @@ impl CommandHandler {
         data.push(contact.flags);
         data.push(contact.path_len as u8);
 
-        // Pad path to 64 bytes
-        let mut path = [0u8; 64];
-        let path_len = contact.out_path.len().min(64);
+        // Pad path to the route field's size
+        let mut path = [0u8; MAX_PATH_LEN];
+        let path_len = contact.out_path.len().min(MAX_PATH_LEN);
         path[..path_len].copy_from_slice(&contact.out_path[..path_len]);
         data.extend_from_slice(&path);
 
