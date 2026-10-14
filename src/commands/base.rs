@@ -572,11 +572,11 @@ impl CommandHandler {
 
     /// Set a custom variable
     ///
-    /// Format: [CMD_SET_CUSTOM_VAR=0x29][key=value]
+    /// Format: [CMD_SET_CUSTOM_VAR=0x29][key:value]
     pub async fn set_custom_var(&self, key: &str, value: &str) -> Result<()> {
         let mut data = vec![CMD_SET_CUSTOM_VAR];
         data.extend_from_slice(key.as_bytes());
-        data.push(b'=');
+        data.push(b':');
         data.extend_from_slice(value.as_bytes());
         self.send_checked(&data).await?;
         Ok(())
@@ -2937,9 +2937,8 @@ mod tests {
         tokio::spawn(async move {
             let sent = rx.recv().await.unwrap();
             assert_eq!(sent[0], CMD_SET_CUSTOM_VAR);
-            // Should contain "key=value"
             let payload = String::from_utf8_lossy(&sent[1..]);
-            assert!(payload.contains("mykey=myvalue"));
+            assert_eq!(payload, "mykey:myvalue");
 
             dispatcher_clone.emit(MeshCoreEvent::ok()).await;
         });

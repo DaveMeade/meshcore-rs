@@ -980,7 +980,7 @@ mod tests {
         let mut receiver = dispatcher.receiver();
 
         let mut data = vec![PacketType::CustomVars as u8];
-        data.extend_from_slice(b"key1=value1\nkey2=value2");
+        data.extend_from_slice(b"key1:value1,key2:value2");
 
         reader.handle_rx(data).await.unwrap();
 
