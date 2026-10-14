@@ -573,7 +573,15 @@ impl CommandHandler {
     /// Set a custom variable
     ///
     /// Format: [CMD_SET_CUSTOM_VAR=0x29][key:value]
+    ///
+    /// The firmware splits at the first `:` and lists variables joined by `,`,
+    /// so a key may not contain either and a value may not contain `,`.
     pub async fn set_custom_var(&self, key: &str, value: &str) -> Result<()> {
+        if key.contains([':', ',']) || value.contains(',') {
+            return Err(Error::invalid_param(
+                "custom variable key may not contain ':' or ',' and value may not contain ','",
+            ));
+        }
         let mut data = vec![CMD_SET_CUSTOM_VAR];
         data.extend_from_slice(key.as_bytes());
         data.push(b':');
@@ -2945,6 +2953,14 @@ mod tests {
 
         let result = handler.set_custom_var("mykey", "myvalue").await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_set_custom_var_rejects_delimiters() {
+        let (handler, _rx, _dispatcher) = create_test_handler();
+        assert!(handler.set_custom_var("a:b", "1").await.is_err());
+        assert!(handler.set_custom_var("a,b", "1").await.is_err());
+        assert!(handler.set_custom_var("gps", "1,2").await.is_err());
     }
 
     #[tokio::test]
