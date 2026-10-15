@@ -7,9 +7,9 @@ use crate::error::Error;
 use crate::events::{
     AclEntry, AdvertResponseData, AdvertisementData, BatteryInfo, ChannelData, ChannelInfoData,
     ChannelMessage, Contact, ContactMessage, CoreStatsData, DeviceInfoData, DiscoverEntry,
-    MeshPacketHeader, MmaEntry, MsgSentInfo, Neighbour, NeighboursData, PacketStatsData,
-    PathDiscoveryResponseData, PathUpdateData, RadioStatsData, RawAdvertisement, SelfInfo,
-    StatsCategory, StatsData, StatusData, TraceHop, TraceInfo,
+    LoginSuccessData, MeshPacketHeader, MmaEntry, MsgSentInfo, Neighbour, NeighboursData,
+    PacketStatsData, PathDiscoveryResponseData, PathUpdateData, RadioStatsData, RawAdvertisement,
+    SelfInfo, StatsCategory, StatsData, StatusData, TraceHop, TraceInfo,
 };
 use crate::packets::{PayloadType, RouteType};
 use crate::{PublicKey, Result, CHANNEL_NAME_LEN, CHANNEL_SECRET_LEN, PUBLIC_KEY_LEN};
@@ -1253,8 +1253,9 @@ pub fn parse_discover_response(payload: &[u8]) -> Vec<DiscoverEntry> {
     let mut offset = 0;
     while offset + DISCOVER_ENTRY_MIN_LEN <= payload.len() {
         // jonesy:allow(overflow)
-        let pubkey = payload[offset..offset + DISCOVER_NAME_OFFSET].to_vec(); // jonesy:allow(overflow)
-        let name = read_string(payload, offset + DISCOVER_NAME_OFFSET, DISCOVER_NAME_LEN); // jonesy:allow(overflow)
+        let pubkey = payload[offset..offset + DISCOVER_NAME_OFFSET].to_vec();
+        let name_offset = offset + DISCOVER_NAME_OFFSET; // jonesy:allow(overflow)
+        let name = read_string(payload, name_offset, DISCOVER_NAME_LEN);
         entries.push(DiscoverEntry { pubkey, name });
         offset += DISCOVER_ENTRY_LEN; // jonesy:allow(overflow) -- bounded by payload.len()
     }
@@ -1364,6 +1365,94 @@ pub fn parse_status_response(payload: &[u8]) -> Result<StatusResponseFrame> {
         sender_prefix,
         status,
     })
+}
+
+// --- LoginSuccess payload layout ---
+//
+// Firmware layout: [permissions: 1][pubkey_prefix: 6][timestamp: 4]
+// [acl_permissions: 1][firmware_ver_level: 1]
+//
+// The trailing fields were added one at a time, so the payload length
+// depends on the companion firmware release:
+//   7 bytes:  before companion-v1.7.0, or a legacy "OK" server reply on any release
+//   11 bytes: companion-v1.7.0 adds server_timestamp (MeshCore 0e90b731)
+//   12 bytes: companion-v1.7.3 adds acl_permissions (MeshCore 7947e8a2)
+//   13 bytes: companion-v1.9.0 adds firmware_ver_level (MeshCore 418ae08b)
+//
+// None of these changes bumped FIRMWARE_VER_CODE so the payload length is the only
+// reliable signal of which fields are present.
+//
+// Servers older than v1.9.0 used byte 7 for other data (room servers sent an
+// unsynced post count), so acl_permissions is only meaningful from v1.9.0+ servers.
+
+/// Minimum length for a LoginSuccess payload (permissions + prefix).
+const LOGIN_SUCCESS_MIN_LEN: usize = 7;
+/// Length of a LoginSuccess payload that includes the server timestamp.
+const LOGIN_SUCCESS_WITH_TIMESTAMP_LEN: usize = 11;
+/// Offset of the public key prefix in a LoginSuccess payload.
+const LOGIN_SUCCESS_PREFIX_OFFSET: usize = 1;
+/// Offset of the server timestamp in a LoginSuccess payload.
+const LOGIN_SUCCESS_SERVER_TIMESTAMP_OFFSET: usize = 7;
+/// Offset of the ACL permissions in a LoginSuccess payload.
+const LOGIN_SUCCESS_ACL_PERMISSIONS_OFFSET: usize = 11;
+/// Offset of the firmware version level in a LoginSuccess payload.
+const LOGIN_SUCCESS_FIRMWARE_VER_LEVEL_OFFSET: usize = 12;
+
+/// Parse [`LoginSuccessData`] from a `PacketType::LoginSuccess` payload.
+///
+/// The LoginSuccess frame supports a variable number of fields based on
+/// the companion client version. Any bytes after the pubkey prefix must
+/// contain a complete server timestamp. In contrast to some other frame
+/// parsers the login success parser allows trailing bytes after the known
+/// fields in case the API changes again.
+pub fn parse_login_success(payload: &[u8]) -> Result<LoginSuccessData> {
+    let len = payload.len();
+    if len < LOGIN_SUCCESS_MIN_LEN {
+        return Err(Error::protocol(format!(
+            "LoginSuccess payload too short: {len} bytes"
+        )));
+    }
+    if len > LOGIN_SUCCESS_MIN_LEN && len < LOGIN_SUCCESS_WITH_TIMESTAMP_LEN {
+        return Err(Error::protocol(format!(
+            "LoginSuccess server timestamp truncated: {len} bytes"
+        )));
+    }
+
+    Ok(LoginSuccessData {
+        permissions: *payload
+            .first()
+            .ok_or_else(|| Error::protocol("LoginSuccess payload too short"))?,
+        pubkey_prefix: read_bytes(payload, LOGIN_SUCCESS_PREFIX_OFFSET)?,
+        server_timestamp: read_u32_le(payload, LOGIN_SUCCESS_SERVER_TIMESTAMP_OFFSET).ok(),
+        acl_permissions: payload.get(LOGIN_SUCCESS_ACL_PERMISSIONS_OFFSET).copied(),
+        firmware_ver_level: payload
+            .get(LOGIN_SUCCESS_FIRMWARE_VER_LEVEL_OFFSET)
+            .copied(),
+    })
+}
+
+// --- LoginFailed payload layout ---
+//
+// Firmware layout: [reserved: 1][pubkey_prefix: 6]
+
+/// Length of a LoginFailed payload (reserved + prefix).
+const LOGIN_FAILED_LEN: usize = 7;
+/// Offset of the public key prefix in a LoginFailed payload.
+const LOGIN_FAILED_PREFIX_OFFSET: usize = 1;
+
+/// Parse the public key prefix from a `PacketType::LoginFailed` payload.
+///
+/// Returns an error if the payload is not exactly `LOGIN_FAILED_LEN` bytes.
+pub fn parse_login_failed(payload: &[u8]) -> Result<[u8; 6]> {
+    if payload.len() != LOGIN_FAILED_LEN {
+        return Err(Error::protocol(format!(
+            "LoginFailed payload must be {} bytes, got {}",
+            LOGIN_FAILED_LEN,
+            payload.len()
+        )));
+    }
+
+    read_bytes(payload, LOGIN_FAILED_PREFIX_OFFSET)
 }
 
 // --- TelemetryResponse payload layout ---
@@ -2895,6 +2984,114 @@ mod tests {
         let frame = parse_status_response(&data).unwrap();
         assert_eq!(frame.sender_prefix, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         assert_eq!(frame.status.battery_mv, 3700);
+    }
+
+    // ========== parse_login_success tests ==========
+
+    #[test]
+    fn test_parse_login_success_too_short() {
+        for data in [&[][..], &[0; 6]] {
+            assert!(matches!(
+                parse_login_success(data),
+                Err(Error::Protocol(msg)) if msg.contains("too short")
+            ));
+        }
+    }
+
+    #[test]
+    fn test_parse_login_success_truncated_timestamp() {
+        let mut data = vec![0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        data.extend_from_slice(&1_700_000_000u32.to_le_bytes());
+        assert!(parse_login_success(&data[..7]).is_ok());
+        for len in 8..=10 {
+            assert!(
+                matches!(
+                    parse_login_success(&data[..len]),
+                    Err(Error::Protocol(msg)) if msg.contains("timestamp truncated")
+                ),
+                "len {len}"
+            );
+        }
+        assert!(parse_login_success(&data[..11]).is_ok());
+    }
+
+    #[test]
+    fn test_parse_login_success_legacy() {
+        let data = [0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        let login = parse_login_success(&data).unwrap();
+        assert_eq!(login.permissions, 1);
+        assert_eq!(login.pubkey_prefix, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        assert_eq!(login.server_timestamp, None);
+        assert_eq!(login.acl_permissions, None);
+        assert_eq!(login.firmware_ver_level, None);
+    }
+
+    #[test]
+    fn test_parse_login_success_with_timestamp() {
+        let mut data = vec![0x02, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        data.extend_from_slice(&1_700_000_000u32.to_le_bytes());
+        let login = parse_login_success(&data).unwrap();
+        assert_eq!(login.permissions, 2);
+        assert_eq!(login.server_timestamp, Some(1_700_000_000));
+        assert_eq!(login.acl_permissions, None);
+        assert_eq!(login.firmware_ver_level, None);
+    }
+
+    #[test]
+    fn test_parse_login_success_with_acl_permissions() {
+        let mut data = vec![0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        data.extend_from_slice(&1_700_000_000u32.to_le_bytes());
+        data.push(0x03);
+        let login = parse_login_success(&data).unwrap();
+        assert_eq!(login.server_timestamp, Some(1_700_000_000));
+        assert_eq!(login.acl_permissions, Some(0x03));
+        assert_eq!(login.firmware_ver_level, None);
+    }
+
+    #[test]
+    fn test_parse_login_success_current() {
+        let mut data = vec![0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        data.extend_from_slice(&1_700_000_000u32.to_le_bytes());
+        data.extend_from_slice(&[0x03, 0x01]);
+        let login = parse_login_success(&data).unwrap();
+        assert_eq!(login.permissions, 1);
+        assert_eq!(login.pubkey_prefix, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        assert_eq!(login.server_timestamp, Some(1_700_000_000));
+        assert_eq!(login.acl_permissions, Some(0x03));
+        assert_eq!(login.firmware_ver_level, Some(0x01));
+    }
+
+    #[test]
+    fn test_parse_login_success_ignores_trailing_bytes() {
+        let mut data = vec![0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        data.extend_from_slice(&1_700_000_000u32.to_le_bytes());
+        data.extend_from_slice(&[0x03, 0x01, 0xEE, 0xFF]);
+        let login = parse_login_success(&data).unwrap();
+        assert_eq!(login.permissions, 1);
+        assert_eq!(login.pubkey_prefix, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        assert_eq!(login.server_timestamp, Some(1_700_000_000));
+        assert_eq!(login.acl_permissions, Some(0x03));
+        assert_eq!(login.firmware_ver_level, Some(0x01));
+    }
+
+    // ========== parse_login_failed tests ==========
+
+    #[test]
+    fn test_parse_login_failed_too_short() {
+        assert!(parse_login_failed(&[]).is_err());
+        assert!(parse_login_failed(&[0; 6]).is_err());
+    }
+
+    #[test]
+    fn test_parse_login_failed_too_long() {
+        assert!(parse_login_failed(&[0; 8]).is_err());
+    }
+
+    #[test]
+    fn test_parse_login_failed() {
+        let data = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        let prefix = parse_login_failed(&data).unwrap();
+        assert_eq!(prefix, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
     }
 
     // ========== parse_telemetry_response tests ==========
