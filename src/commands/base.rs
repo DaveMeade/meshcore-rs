@@ -1301,6 +1301,44 @@ impl CommandHandler {
         }
     }
 
+    /// Send a room server a keep-alive carrying the client's sync point
+    ///
+    /// Format: [CMD_SEND_BINARY_REQ=0x32][pubkey: 32][KEEP_ALIVE=0x02][sync_since: u32 LE]
+    ///
+    /// The server takes the sync point only from a keep-alive that arrived
+    /// direct; a `message_type` of 1 means the radio flooded it.
+    pub async fn send_keep_alive(
+        &self,
+        dest: impl Into<Destination>,
+        sync_since: u32,
+    ) -> Result<MsgSentInfo> {
+        let dest: Destination = dest.into();
+        let pubkey = dest
+            .public_key()
+            .ok_or_else(|| Error::invalid_param("Keep-alive requires full 32-byte public key"))?;
+
+        let mut data = vec![CMD_SEND_BINARY_REQ];
+        data.extend_from_slice(&pubkey);
+        data.push(BinaryReqType::KeepAlive as u8);
+        data.extend_from_slice(&sync_since.to_le_bytes());
+
+        let event = self
+            .send_multi(
+                &data,
+                &[EventType::MsgSent, EventType::Error],
+                self.default_timeout,
+            )
+            .await?;
+
+        if event.event_type == EventType::Error {
+            return device_error(event.payload);
+        }
+        match event.payload {
+            EventPayload::MsgSent(info) => Ok(info),
+            _ => Err(Error::protocol("Unexpected response to keep-alive")),
+        }
+    }
+
     /// Request status from a contact
     pub async fn request_status(&self, dest: impl Into<Destination>) -> Result<StatusData> {
         self.request_status_with_timeout(dest, self.default_timeout)
@@ -2247,6 +2285,49 @@ mod tests {
         let event = MeshCoreEvent::new(EventType::NextContact, EventPayload::None);
         let _frames = answer(rx, dispatcher, event);
         let r = handler.get_contact_by_key(&KEY).await;
+        assert_matches!(r, Err(Error::Protocol(_)));
+    }
+
+    #[tokio::test]
+    async fn send_keep_alive_carries_the_sync_point() {
+        let (handler, rx, dispatcher) = create_test_handler();
+        let sent = MsgSentInfo {
+            message_type: 0,
+            expected_ack: [1, 2, 3, 4],
+            suggested_timeout: 3000,
+        };
+        let event = MeshCoreEvent::new(EventType::MsgSent, EventPayload::MsgSent(sent));
+        let frames = answer(rx, dispatcher, event);
+
+        let info = handler
+            .send_keep_alive(&KEY[..], 0x1234_5678)
+            .await
+            .unwrap();
+        drop(handler);
+
+        assert_eq!(info.message_type, 0);
+        assert_eq!(info.expected_ack, [1, 2, 3, 4]);
+        let mut want = vec![CMD_SEND_BINARY_REQ];
+        want.extend_from_slice(&KEY);
+        want.push(BinaryReqType::KeepAlive as u8);
+        want.extend_from_slice(&[0x78, 0x56, 0x34, 0x12]);
+        assert_eq!(frames.await.unwrap(), vec![want]);
+    }
+
+    #[tokio::test]
+    async fn send_keep_alive_returns_the_error_frame() {
+        let (handler, rx, dispatcher) = create_test_handler();
+        let _frames = answer(rx, dispatcher, MeshCoreEvent::error("code 2"));
+        let r = handler.send_keep_alive(&KEY[..], u32::MAX).await;
+        assert_matches!(r, Err(Error::Device(m)) if m == "code 2");
+    }
+
+    #[tokio::test]
+    async fn send_keep_alive_bad_payload() {
+        let (handler, rx, dispatcher) = create_test_handler();
+        let event = MeshCoreEvent::new(EventType::MsgSent, EventPayload::None);
+        let _frames = answer(rx, dispatcher, event);
+        let r = handler.send_keep_alive(&KEY[..], 1).await;
         assert_matches!(r, Err(Error::Protocol(_)));
     }
 
